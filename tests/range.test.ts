@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, heartbeat, increments, isWatched, needsMore, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, averageNote, heartbeat, increments, isWatched, needsMore, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
 
@@ -82,6 +82,18 @@ test("since the reset uses Anthropic's figure; a window uses only what was recor
   const recorded = project(readings, 'week', T0, hours(7))!
   expect(recorded.winH).toBe(7)
   expect(Math.round(recorded.rate * 7)).toBe(7)
+})
+
+test("a 5-hour window just installed into averages from Anthropic's figure since it opened", async () => {
+  // 20% used, the window opened 2h ago; the first reading came a minute ago
+  const r: RangeReading[] = [[T0 - MIN, 0, 20, T0 + 3 * HOUR]]
+  const m = project(r, 'five', T0, { type: 'reset' })!
+  expect(m.noData).toBe(null)
+  expect(m.winH).toBe(2)
+  expect(m.rate).toBe(10)
+  expect(averageNote(m)).toMatch(/^Average since the 5-hour window opened 2h 00m ago, from Anthropic's figure/)
+  // ten minutes after it opened there is no estimate yet
+  expect(project([[T0, 0, 3, T0 + 4 * HOUR + 50 * MIN]], 'five', T0, { type: 'reset' })!.noData).toMatch(/after the 5-hour window opened/)
 })
 
 test('reset countdown switches units', async () => {

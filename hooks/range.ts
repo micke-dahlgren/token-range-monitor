@@ -12,7 +12,7 @@ const SPREAD = 10 * MIN
 /** Readings older than this are dropped: enough for a 2-week window plus slack. */
 export const KEEP = 22 * DAY
 
-export const DEFAULT_SETTINGS: RangeSettings = { mode: 'window', n: 1, unit: 'd', fine: false }
+export const DEFAULT_SETTINGS: RangeSettings = { mode: 'reset', n: 1, unit: 'd', fine: false }
 export const UNIT_HOURS = { h: 1, d: 24, w: 168 } as const
 /** The longest window on offer per unit: a day in hours, the week's own length in days. */
 export const UNIT_MAX = { h: 24, d: 7 } as const
@@ -219,7 +219,7 @@ export function project(readings: readonly RangeReading[], kind: Kind, now: numb
   const recordedH = (now - recordedFrom) / HOUR
   const sinceResetH = (now - (resetsAt - SPAN[kind])) / HOUR
   const noData = avg.type === 'reset'
-    ? sinceResetH < MIN_SINCE_RESET_H[kind] ? `No estimate this soon after the reset. About ${dur(MIN_SINCE_RESET_H[kind] - sinceResetH)} to go.` : null
+    ? sinceResetH < MIN_SINCE_RESET_H[kind] ? `No estimate this soon after ${kind === 'five' ? 'the 5-hour window opened' : 'the reset'}. About ${dur(MIN_SINCE_RESET_H[kind] - sinceResetH)} to go.` : null
     : avg.hours < MIN_RECORDED_H[kind] ? tooShort(kind) : avg.hours > recordedH ? needsMore(avg, recordedH) : null
   const rate = noData ? 0 : (avg.type === 'reset' ? pct : usedBetween(incs, from, now)) / winH
   const left = (resetsAt - now) / HOUR
@@ -278,9 +278,10 @@ const hoursToWindow = (h: number): Pick<RangeSettings, 'n' | 'unit'> =>
 export function averageNote(m: Model): string {
   if (m.noData) return m.noData
   if (m.average.type === 'reset') {
+    const since = m.kind === 'five' ? `the 5-hour window opened` : `the reset`
     return m.recordedFrom > m.from
-      ? `Average since the reset ${dur(m.winH)} ago, from Anthropic's figure. Bars show only what was recorded.`
-      : `Average since the reset ${dur(m.winH)} ago.`
+      ? `Average since ${since} ${dur(m.winH)} ago, from Anthropic's figure. Bars show only what was recorded.`
+      : `Average since ${since} ${dur(m.winH)} ago.`
   }
   return `Average over the last ${averageName(m.average)}.`
 }

@@ -39,7 +39,7 @@ claude plugin update token-range-monitor
 - **Left at reset**, **Average** (your usage rate) and **Limit** (the highest rate you can keep up until the reset without running out). When you're over, it also says when you'd run out.
 - A chart of your usage over the averaging window, ending at *Now*. The dotted line is your average and the cyan line is the limit. If the dotted line is above the cyan one, you'll run out before the reset.
 - For the weekly limit, a choice of what the average covers:
-  - **Since reset:** your usage since the weekly reset, from Anthropic's own figure.
+  - **Since reset** (the default): your usage since the weekly reset, from Anthropic's own figure. It needs no recorded history, so it works right after you install.
   - **Custom:** the last 1–24 hours or 1–7 days.
 
 Open the pane with `/token-range`. You can also set the window from the prompt: `/token-range 2d`, `/token-range 12h` or `/token-range reset`.
@@ -56,7 +56,7 @@ The mod shows **No data** rather than a misleading number when there isn't enoug
 - **A custom window needs that much recorded history.** A 2-day average needs 2 days of readings.
 - **Weekly estimates need at least 6 hours of data.** The weekly percentage moves in steps of about a point, so over a short stretch a single step reads as a huge rate.
 - **Since reset waits 6 hours after each weekly reset.**
-- **The 5-hour estimate averages the last 30 minutes.**
+- **The 5-hour estimate averages the last 30 minutes.** Until 30 minutes are recorded, it uses Anthropic's figure since the 5-hour window opened, starting 15 minutes after it opens.
 
 ## Good to know
 

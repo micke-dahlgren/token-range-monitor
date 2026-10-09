@@ -99,7 +99,8 @@ async function models($: EngineInterface) {
   const weekRecorded = recordedHours(list, 'week', now)
   const fiveRecorded = recordedHours(list, 'five', now)
   const weekAvg = chosenAverage(s)
-  const fiveAvg: Average = { type: 'hours', hours: FIVE_WINDOW_MIN / 60 }
+  // until half an hour is on record, Anthropic's own figure since the 5-hour window opened stands in
+  const fiveAvg: Average = fiveRecorded < FIVE_WINDOW_MIN / 60 ? { type: 'reset' } : { type: 'hours', hours: FIVE_WINDOW_MIN / 60 }
   return {
     now, s, weekRecorded,
     week: project(list, 'week', now, weekAvg, watched),

@@ -50,6 +50,10 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   const note = async () => (await pane.find({ type: 'Text', text: /^Average (over the last|over everything|since)/ }))?.text
   const press = (key: string) => pane.press({ key })
 
+  // a fresh install averages since the reset, with no window row
+  expect(await note()).toMatch(/^Average since the reset /)
+  expect(await pane.find({ key: 'win-inc' })).toBeUndefined()
+  await press('mode-custom')
   for (let i = 0; i < 6; i++) await press('win-inc')
   expect(await note()).toBe('Average over the last 7d.')
   expect(String((await pane.find({ type: 'Svg' }))?.props.alt)).toMatch(/Runs out in /)
