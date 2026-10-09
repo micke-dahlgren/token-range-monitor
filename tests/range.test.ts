@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, paceExplain, paceText, recentPace, increments, isWatched, needsMore, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, paceExplain, paceText, recentPace, increments, isWatched, needsMore, refine, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
 
@@ -188,4 +188,20 @@ test('the recent pace waits for enough to relate the two limits, and says what f
   const p = recentPace(readings, week, T0)
   expect(p.ready).toBe(false)
   expect(paceText(p)).toBe('No pace yet. It needs your weekly usage to go up 3% while recording. Up 1% so far.')
+})
+
+test('each rise is shared among the responses behind it, not piled before the reading', async () => {
+  // the weekly figure reads 10 for an hour (repeated every few minutes), then 11
+  const readings: RangeReading[] = [0, 10, 20, 30, 40, 50].map(m => [T0 - HOUR + m * MIN, 1, 10, weekReset] as RangeReading)
+  readings.push([T0, 1, 11, weekReset])
+  const seen: Array<[number, number]> = [[T0 - HOUR, T0]]
+  const incs = increments(readings, 'week', seen)
+  // the rise came some time after the figure first read 10, not in the last minutes
+  expect(incs[0]!.from).toBe(T0 - HOUR)
+  // three responses: a big one early, two small ones late; the point is shared 2 : 1 : 1
+  const shaped = refine(incs, [[T0 - 50 * MIN, 200], [T0 - 10 * MIN, 100], [T0 - 5 * MIN, 100]])
+  expect(shaped.map(i => i.amount)).toEqual([0.5, 0.25, 0.25])
+  expect(Math.abs(usedBetween(shaped, T0 - HOUR, T0 - 30 * MIN) - 0.5)).toBeLessThan(1e-9)
+  // with no responses behind it, the rise stays where the reading put it
+  expect(refine(incs, [])).toEqual(incs)
 })

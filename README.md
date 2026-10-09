@@ -38,7 +38,7 @@ claude plugin update token-range-monitor
 
 - **Left at reset**, **Average** (your usage rate) and **Limit** (the highest rate you can keep up until the reset without running out). When you're over, it also says when you'd run out.
 - A chart of your usage over the averaging window, ending at *Now*. The dotted line is your average and the solid line is the limit. If the dotted line is above the solid one, you'll run out before the reset.
-- Bars are usage seen as it happened. Stretches the plugin didn't see (before it was installed, or while no session here was getting responses) show as one low block labelled with what's known, like "12% used while away, 9h".
+- Bars are usage seen as it happened. Anthropic reports each limit in whole percents, so each rise is shared among the responses made since the previous one, by their size. That way the bars follow your actual work and don't all come out one percent high. Stretches the plugin didn't see (before it was installed, or while no session here was getting responses) show as one low block labelled with what's known, like "12% used while away, 9h".
 - For the weekly limit, a choice of what the average covers:
   - **Since reset** (the default): your usage since the weekly reset, from Anthropic's own figure. It needs no recorded history, so it works right after you install.
   - **Custom:** the last 1–24 hours or 1–7 days.

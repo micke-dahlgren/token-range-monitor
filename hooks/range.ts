@@ -118,6 +118,8 @@ export type Increment = {
   amount: number
   /** Set when the rise came over a gap this computer didn't watch: the gap's start and where the rise was placed. Drawn as the gap's block. */
   hole?: [number, number]
+  /** For a rise seen while watching: when the reading before it was taken, so the rise came somewhere after. */
+  from?: number
 }
 
 /**
@@ -137,6 +139,7 @@ export function increments(readings: readonly RangeReading[], kind: Kind, seen: 
   const fives = ofKind(readings, 'five')
   const out: Increment[] = []
   let high = rs[0]?.[2] ?? 0
+  let reached = rs[0]?.[0] ?? 0
   for (let i = 1; i < rs.length; i++) {
     const a = rs[i - 1]!, b = rs[i]!
     let amount: number
@@ -151,6 +154,8 @@ export function increments(readings: readonly RangeReading[], kind: Kind, seen: 
       start = fiveStart !== undefined && fiveStart > a[0] ? fiveStart : a[0]
       hole = [a[0], start > a[0] ? start : b[0]]
     }
+    // the rise came after the figure first reached its last point: readings repeat while it stays put
+    let from = reached
     if (sameWindow(a, b)) {
       amount = b[2] - high
       high = Math.max(high, b[2])
@@ -158,8 +163,39 @@ export function increments(readings: readonly RangeReading[], kind: Kind, seen: 
       amount = b[2]
       high = b[2]
       start = Math.max(start, b[3] - SPAN[kind])
+      from = Math.max(a[0], b[3] - SPAN[kind])
     }
-    if (amount > 0) out.push({ start: Math.min(start, b[0] - 1), end: b[0], amount, ...(hole ? { hole } : {}) })
+    if (amount > 0) {
+      out.push({ start: Math.min(start, b[0] - 1), end: b[0], amount, ...(hole ? { hole } : { from }) })
+      reached = b[0]
+    }
+  }
+  return out
+}
+
+/**
+ * Rises placed where the work behind them happened. A limit is read in whole
+ * points, so on its own a rise only says which reading saw it: every bar of
+ * one point would be the same height. Each rise seen while watching is shared
+ * among the responses made since the figure reached its previous point, by their weight
+ * (`points`: when, and how much work), so the total stays Anthropic's and the
+ * shape is the work's. A rise with no responses behind it, or over a gap,
+ * stays as it was.
+ */
+export function refine(incs: readonly Increment[], points: ReadonlyArray<readonly [number, number]>): Increment[] {
+  const pts = [...points].sort((a, b) => a[0] - b[0])
+  const out: Increment[] = []
+  let k = 0
+  for (const inc of [...incs].sort((a, b) => a.end - b.end)) {
+    if (inc.hole || inc.from === undefined) { out.push(inc); continue }
+    while (k < pts.length && pts[k]![0] <= inc.from) k++
+    let j = k, total = 0
+    while (j < pts.length && pts[j]![0] <= inc.end) total += pts[j++]![1]
+    if (total <= 0) { out.push(inc); continue }
+    for (let i = k; i < j; i++) {
+      const [t, w] = pts[i]!
+      if (w > 0) out.push({ start: t - MIN, end: t, amount: inc.amount * w / total })
+    }
   }
   return out
 }

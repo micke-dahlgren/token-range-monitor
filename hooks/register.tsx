@@ -5,7 +5,7 @@ import type { RangeReading, RangeSettings, RangeStep, RangeWatch } from '../type
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   drawingHeight, emptyChartSvg, emptyChartText, fit, fx, headerDraw, paceExplain, paceText, recentPace, withInfo, fiveChart, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
-  isShort, leftText, runsOut, weekChart, windowHours,
+  isShort, leftText, refine, runsOut, weekChart, windowHours,
 } from './range'
 import type { Average, Model } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
@@ -241,13 +241,23 @@ async function models($: EngineInterface) {
   const weekAvg = chosenAverage(s)
   // the 5-hour average runs from the window's opening: Anthropic's own figure, and the chart shows the whole window
   const fiveAvg: Average = { type: 'reset' }
-  const week = project(list, 'week', now, weekAvg, watched)
+  const stepList = await read($, steps)
+  const learned = learn(list, stepList, watched, now)
+  const projected = project(list, 'week', now, weekAvg, watched)
+  // the bars follow the responses behind each rise, each weighed by its model's cost where that's known
+  const shown = learned.models.filter(m => m.shown)
+  const usual = shown.length ? shown.reduce((a, m) => a + m.w, 0) / shown.length : 1
+  const weightOf = new Map(learned.models.map(m => [m.id, m.shown ? m.w : usual]))
+  const work = stepList.map(st => [st[0], st[3] * (weightOf.get(st[1]) ?? usual)] as const)
+  const shaped = (m: Model | null) => (m ? { ...m, increments: refine(m.increments, work) } : null)
+  const week = shaped(projected)
   return {
     now, s, weekRecorded, pal, week,
-    five: project(list, 'five', now, fiveAvg, watched),
-    pace: week ? recentPace(list, week, now, watched) : null,
-    learned: learn(list, await read($, steps), watched, now),
-    steps: await read($, steps),
+    five: shaped(project(list, 'five', now, fiveAvg, watched)),
+    // the pace and the costs read the rises as the readings gave them
+    pace: projected ? recentPace(list, projected, now, watched) : null,
+    learned,
+    steps: stepList,
   }
 }
 
