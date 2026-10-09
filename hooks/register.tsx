@@ -44,21 +44,28 @@ let othersSeen: RangeWatch[] = []
  * The signed-in account and organisation, from Claude Code's own config:
  * the limits belong to both. `none` off a subscription, which has no limits.
  */
-async function accountOf($: EngineInterface): Promise<string> {
+let accountRead: { mtime: number; account: string } | undefined
+async function accountOf($: EngineInterface): Promise<string | null> {
   try {
     const dir = await $.env.get('CLAUDE_CONFIG_DIR')
     const file = dir ? `${dir}/.claude.json` : `${(await $.env.get('HOME')) ?? ''}/.claude.json`
+    // the file is read again only once it changed
+    const { mtimeMs } = await $.fs.stat(file)
+    if (accountRead?.mtime === mtimeMs) return accountRead.account
     const o = (JSON.parse(await $.fs.read(file)) as { oauthAccount?: { accountUuid?: string; organizationUuid?: string } }).oauthAccount
-    return o?.accountUuid ? `${o.accountUuid}.${o.organizationUuid ?? ''}` : 'none'
+    const a = o?.accountUuid ? `${o.accountUuid}.${o.organizationUuid ?? ''}` : 'none'
+    accountRead = { mtime: mtimeMs, account: a }
+    return a
   } catch {
-    return 'none'
+    // unreadable (mid-write, say): no answer, which is no sign-in elsewhere
+    return null
   }
 }
 
 /** Follows a sign-in to another account: this session starts a fresh list under it. True when it moved. */
 async function followAccount($: EngineInterface): Promise<boolean> {
   const now = await $.clock.now()
-  const a = await accountOf($)
+  const a = (await accountOf($)) ?? (account || 'none')
   if (a === account) return false
   account = a
   ownKey = newOwnKey(now)
@@ -80,8 +87,10 @@ async function otherCopies($: EngineInterface): Promise<Array<[string, unknown]>
     const out: Array<[string, unknown]> = []
     for (const f of await $.fs.list(stores)) {
       if (!/^token-range-monitor_.*\.json$/.test(f.name)) continue
-      const entries = JSON.parse(await $.fs.read(`${stores}/${f.name}`)) as Record<string, unknown>
-      out.push(...Object.entries(entries))
+      // a file being written as it's read is skipped this time, the others still count
+      try {
+        out.push(...Object.entries(JSON.parse(await $.fs.read(`${stores}/${f.name}`)) as Record<string, unknown>))
+      } catch { /* next minute */ }
     }
     return out
   } catch {
@@ -165,19 +174,22 @@ async function capture($: EngineInterface, limits: readonly SessionRateLimit[]) 
  * Reads the person's theme and derives the card's palettes from it. A custom
  * theme (`custom:<slug>`) is the person's own file or one a plugin ships.
  */
+let themeFile: { slug: string; path: string } | undefined
 async function loadTheme($: EngineInterface) {
   const setting = ((await $.settings.read()) as { theme?: unknown }).theme
   const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? ''}/.claude`
   const theme = await resolveTheme(setting, async slug => {
+    // found once, then read where it was; searched again only if it's gone
+    if (themeFile?.slug === slug && await $.fs.exists(themeFile.path)) return await $.fs.read(themeFile.path)
     const own = `${dir}/themes/${slug}.json`
-    if (await $.fs.exists(own)) return await $.fs.read(own)
+    if (await $.fs.exists(own)) { themeFile = { slug, path: own }; return await $.fs.read(own) }
     // plugins are cached as cache/<marketplace>/<plugin>/<version>/
     const cache = `${dir}/plugins/cache`
     for (const m of await $.fs.list(cache).catch(() => [])) {
       for (const pl of await $.fs.list(`${cache}/${m.name}`).catch(() => [])) {
         for (const ver of await $.fs.list(`${cache}/${m.name}/${pl.name}`).catch(() => [])) {
           const file = `${cache}/${m.name}/${pl.name}/${ver.name}/themes/${slug}.json`
-          if (await $.fs.exists(file)) return await $.fs.read(file)
+          if (await $.fs.exists(file)) { themeFile = { slug, path: file }; return await $.fs.read(file) }
         }
       }
     }
@@ -325,7 +337,7 @@ export const register: Register = on => {
     const weekDrawing = (m: Model) => {
       const chart = emptyChartText(m, now) ? emptyChartSvg(m, now, size.width, pal) : weekChart(m, now, size.width, pal, size.weekHeight)
       if (!pace) return chart
-      const head = headerDraw(m, 'This week', size.headWidth, pal, resetsIn(m, s.fine), pace)
+      const head = headerDraw(m, 'This week', size.width, pal, resetsIn(m, s.fine), pace)
       return withInfo(head, chart, `${paceText(pace)}\n${paceExplain(pace)}`, size.width, pal)
     }
 
@@ -351,7 +363,7 @@ export const register: Register = on => {
         {!headInChart && <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
           {Svg ? (
             <Draw
-              svg={headerSvg(m, title, size.headWidth, pal, resetsIn(m, s.fine))}
+              svg={headerSvg(m, title, size.width, pal, resetsIn(m, s.fine))}
               alt={`${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}
             />
           ) : (

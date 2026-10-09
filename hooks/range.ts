@@ -417,7 +417,6 @@ function headLayout(m: Model, width: number, pace?: Pace) {
   const figure = (r: number) => caption(r) + px('figure') * 1.5
   return { isOver, title, warning, stats, caption, figure, height: Math.ceil(figure(row) + px('figure') * 0.4) }
 }
-export const headerHeight = (m: Model, width = 1e9, pace?: Pace) => headLayout(m, width, pace).height
 
 /** Where the head's info circle sits, in drawn pixels: what the drawing around it places the tooltip by. */
 export type InfoSpot = { cx: number; cy: number; r: number }
@@ -647,8 +646,6 @@ function emptyLayout(m: Model, now: number, width: number) {
   return { head, lines, top, height: Math.ceil(top + 10 + linesHeight(lines.length, 'note') + 18) }
 }
 
-/** How tall the empty state draws at `width`. */
-export const emptyChartHeight = (m: Model, now: number, width: number) => emptyLayout(m, now, width).height
 
 export function emptyChartSvg(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const L = emptyLayout(m, now, width), H = L.height
@@ -683,8 +680,6 @@ export function noteSvg(note: string, width: number, pal: Palettes = DEFAULT_PAL
   const lines = wrap(note, width, role), H = linesHeight(lines.length, role)
   return drawing(lines.map((l, i) => text(0, baseline(i, role), l, { role, ...(fill ? { fill } : {}) })).join(''), H, pal)
 }
-/** How tall `noteSvg` draws this text at `width`. */
-export const noteHeight = (note: string, width: number, role: Role = 'note') => linesHeight(wrap(note, width, role).length, role)
 
 // ---- recent pace ----
 
@@ -797,9 +792,9 @@ export function paceExplain(p: Pace): string {
  * A cell of the desktop's code font in CSS pixels, as measured in the Code
  * tab: the pane reports its width in these cells, the drawings are in pixels.
  */
-export const CELL_PX = { w: 9.5, h: 11.6 }
+export const CELL_PX = { w: 9.5 }
 
-export type Fit = { width: number; headWidth: number; weekHeight: number; fiveHeight: number }
+export type Fit = { width: number; weekHeight: number; fiveHeight: number }
 
 /** Chart heights: a share of the card's width, within bounds. */
 const CHART_H = { week: { ratio: 0.55, min: 260, max: 440 }, five: { ratio: 0.42, min: 200, max: 340 } }
@@ -815,7 +810,7 @@ export function fit(columns: number): Fit {
   // the pane's reported rows don't follow its real height in the desktop app, so the charts' heights
   // follow the card's width instead: a wider card, a taller chart, within bounds
   const tall = (k: 'week' | 'five') => Math.round(Math.min(CHART_H[k].max, Math.max(CHART_H[k].min, width * CHART_H[k].ratio)))
-  return { width, headWidth: width, weekHeight: tall('week'), fiveHeight: tall('five') }
+  return { width, weekHeight: tall('week'), fiveHeight: tall('five') }
 }
 function timeChart(m: Model, now: number, width: number, height: number, palettes: Palettes): string {
   const isWeek = m.kind === 'week'

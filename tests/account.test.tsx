@@ -16,6 +16,10 @@ test("the record is the signed-in account's: an older record moves under it, ano
   let signedIn = 'me'
   on('fs.read', ($, e, next) =>
     e.path === '/home/t/.claude.json' ? { value: JSON.stringify({ oauthAccount: { accountUuid: signedIn, organizationUuid: 'org' } }) } : next(e))
+  // the config file's modified time changes with each sign-in, as Claude Code rewrites it
+  on('fs.stat', ($, e, next) => (e.path === '/home/t/.claude.json'
+    ? { value: { kind: 'file', size: 1, mtimeMs: signedIn === 'me' ? 1 : 2, isLink: false } }
+    : next(e)) as never)
   on('session.usage', () => ({ value: { rateLimits: [] } }) as never)
   on('command.register', () => ({ value: undefined }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -61,6 +65,7 @@ test("another copy's store (a marketplace install beside a dev copy) is read too
     e.path === '/home/t/.claude.json' ? { value: JSON.stringify({ oauthAccount: { accountUuid: 'me', organizationUuid: 'org' } }) }
     : e.path === `${stores}/token-range-monitor_market-1.json` ? { value: JSON.stringify({ 'r:abc': fiveHour, settings: {} }) }
     : next(e))
+  on('fs.stat', ($, e, next) => (e.path === '/home/t/.claude.json' ? { value: { kind: 'file', size: 1, mtimeMs: 1, isLink: false } } : next(e)) as never)
   on('session.usage', () => ({ value: { rateLimits: [] } }) as never)
   on('command.register', () => ({ value: undefined }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
