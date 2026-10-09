@@ -3,7 +3,7 @@ import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
 import type { RangeReading, RangeSettings, RangeWatch } from '../types'
 import {
-  DEFAULT_SETTINGS, FIVE_WINDOW_MIN, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
+  DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   drawingHeight, emptyChartSvg, emptyChartText, fit, fx, headerDraw, paceExplain, paceText, recentPace, withInfo, fiveChart, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
   isShort, leftText, runsOut, weekChart, windowHours,
 } from './range'
@@ -207,10 +207,9 @@ async function models($: EngineInterface) {
   await read($, tick)
   const now = await $.clock.now()
   const weekRecorded = recordedHours(list, 'week', now)
-  const fiveRecorded = recordedHours(list, 'five', now)
   const weekAvg = chosenAverage(s)
-  // until half an hour is on record, Anthropic's own figure since the 5-hour window opened stands in
-  const fiveAvg: Average = fiveRecorded < FIVE_WINDOW_MIN / 60 ? { type: 'reset' } : { type: 'hours', hours: FIVE_WINDOW_MIN / 60 }
+  // the 5-hour average runs from the window's opening: Anthropic's own figure, and the chart shows the whole window
+  const fiveAvg: Average = { type: 'reset' }
   const week = project(list, 'week', now, weekAvg, watched)
   return {
     now, s, weekRecorded, pal, week,

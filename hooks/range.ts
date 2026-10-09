@@ -18,7 +18,6 @@ export const DEFAULT_SETTINGS: RangeSettings = { mode: 'reset', n: 1, unit: 'd',
 export const UNIT_HOURS = { h: 1, d: 24, w: 168 } as const
 /** The longest window on offer per unit: a day in hours, the week's own length in days. */
 export const UNIT_MAX = { h: 24, d: 7 } as const
-export const FIVE_WINDOW_MIN = 30
 
 export const windowHours = (s: Pick<RangeSettings, 'n' | 'unit'>) => Math.min(s.n * UNIT_HOURS[s.unit], KEEP / HOUR - 24)
 export const windowName = (s: Pick<RangeSettings, 'n' | 'unit'>) => `${s.n}${s.unit}`
@@ -600,7 +599,7 @@ export function weekChart(m: Model, now: number, width: number, pal: Palettes = 
   return timeChart(m, now, width, height, pal)
 }
 
-/** The 5-hour chart: normally the last 30 minutes, about a bar a minute. */
+/** The 5-hour chart: the window since it opened. */
 export function fiveChart(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES, height = 300): string {
   return timeChart(m, now, width, height, pal)
 }
@@ -723,6 +722,8 @@ export function recentPace(readings: readonly RangeReading[], week: Model, now: 
   if (weekPoints < PACE_MIN_POINTS) {
     return { ready: false, why: `It needs your weekly usage to go up ${PACE_MIN_POINTS}% while recording. Up ${Math.floor(weekPoints)}% so far.` }
   }
+  // the last hour has to be on record here, not a gap whose rise was placed in it afterwards
+  if (!isWatched(seen, now - PACE_HOURS * HOUR, now)) return { ready: false, why: `It needs the last ${dur(PACE_HOURS)} recorded without a break.` }
   const ratio = usedBetween(fiveIncs, start, now) / weekPoints
   const recent = usedBetween(fiveIncs, now - PACE_HOURS * HOUR, now)
   const rate = ratio > 0 ? recent / ratio / PACE_HOURS : 0
