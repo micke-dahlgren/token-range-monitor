@@ -86,7 +86,7 @@ Each model is judged on its own. Its cost shows once the 90% range of its weight
 - **Pro and Max subscriptions only.** API-key usage has no subscription limits to show.
 - **History starts when you install it.** Readings are recorded while a Claude Code session is open, and every session on this computer shares them. Usage on claude.ai or another device shows up as a jump at the next reading.
 - **It keeps one history per account.** Limits belong to the signed-in account and organization, so signing in to another account switches to that account's own history.
-- **Your data stays on your computer,** in the mod's own storage in your Claude Code configuration folder. Nothing is sent anywhere.
+- **Your data stays on your computer,** in the mod's own storage in your Claude Code configuration folder. Nothing is sent anywhere. The drawings load the IBM Plex fonts from Google Fonts, and use your system's font where they can't.
 - **Built on Claude Code's early-access mod API.** A Claude Code update may change that API and break the mod before it's updated.
 
 ## Development

@@ -331,8 +331,10 @@ export const rateText = (m: Model, perHour: number) =>
 export const C = Object.fromEntries(
   (['card', 'veil', 'fg', 'dim', 'off', 'barTop', 'barBottom', 'limit', 'over', 'under', 'bad', 'fable', 'opus', 'sonnet', 'haiku'] as const).map(k => [k, v(k)]),
 ) as Record<PaletteKey, string>
-export const FONT = 'system-ui, -apple-system, Segoe UI, sans-serif'
-export const MONO = 'ui-monospace, SF Mono, Menlo, monospace'
+/** IBM Plex for words, Plex Mono for figures that line up; the system's own faces where Plex can't load. */
+export const FONT = "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif"
+export const MONO = "'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace"
+const FONTS = `<style>@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap');</style>`
 
 /**
  * Every text style in the drawings, by role: size in rem (1rem = 16px), weight,
@@ -340,28 +342,29 @@ export const MONO = 'ui-monospace, SF Mono, Menlo, monospace'
  * the layout around it follows. A colour that carries state (the green or red
  * figure, the limit line's label) stays that state's colour.
  */
-export const TEXT: Record<Role, { rem: number; weight: number; color: PaletteKey }> = {
+export const TEXT: Record<Role, { rem: number; weight: number; color: PaletteKey; mono?: boolean }> = {
   /** The card's title, "This week". */
-  title: { rem: 1.4, weight: 500, color: 'fg' },
+  title: { rem: 1.2, weight: 500, color: 'fg' },
   /** The run-out warning under the title. */
-  warning: { rem: 0.9, weight: 400, color: 'over' },
-  /** A figure's caption: "Average". */
-  caption: { rem: 0.8, weight: 400, color: 'dim' },
+  warning: { rem: 0.85, weight: 400, color: 'over' },
+  /** A figure's caption: "Average", small and mono. */
+  caption: { rem: 0.6875, weight: 500, color: 'dim', mono: true },
   /** A figure: "19.4%/day". */
-  figure: { rem: 0.8, weight: 400, color: 'fg' },
+  figure: { rem: 0.9375, weight: 500, color: 'fg', mono: true },
   /** The axes, the unit line and notes inside the plot. */
-  axis: { rem: 0.65, weight: 400, color: 'dim' },
+  axis: { rem: 0.7, weight: 400, color: 'dim', mono: true },
   /** The labels on the average and limit lines. */
-  line: { rem: 0.8, weight: 400, color: 'fg' },
+  line: { rem: 0.8125, weight: 500, color: 'fg', mono: true },
   /** The reset countdown beside the title: "Resets in 6.1 days". */
-  countdown: { rem: 0.65, weight: 400, color: 'dim' },
+  countdown: { rem: 0.75, weight: 400, color: 'dim' },
   /** The note under a card: "Average since the reset 23h ago, ...". */
-  note: { rem: 0.65, weight: 400, color: 'dim' },
+  note: { rem: 0.78, weight: 400, color: 'dim' },
 }
 type Role = 'title' | 'warning' | 'caption' | 'figure' | 'axis' | 'line' | 'countdown' | 'note'
 const px = (role: Role) => TEXT[role].rem * 16
-/** About how wide a text runs, for laying out around it. */
-const textWidth = (str: string, role: Role) => str.length * px(role) * (TEXT[role].weight >= 600 ? 0.6 : 0.55)
+/** About how wide a text runs, for laying out around it: mono is 0.6em a character. */
+const textWidth = (str: string, role: Role) =>
+  str.length * px(role) * (TEXT[role].mono ? 0.6 : TEXT[role].weight >= 600 ? 0.62 : 0.58)
 export const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 /**
  * The width a drawing tells the app it has. The app shows each drawing in a
@@ -372,7 +375,7 @@ export const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 const FRAME_W = 2000
 /** A drawing of `content`, `height` pixels tall, filling whatever width its frame has. */
 export function drawing(content: string, height: number, pal: Palettes = DEFAULT_PALETTES): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${FRAME_W}" height="${Math.ceil(height)}"><style>:root{width:100%;height:100%;overflow:hidden}</style>${paletteStyle(pal)}${content}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${FRAME_W}" height="${Math.ceil(height)}">${FONTS}<style>:root{width:100%;height:100%;overflow:hidden}</style>${paletteStyle(pal)}${content}</svg>`
 }
 /** A drawing's height: what its frame is given. */
 export const drawingHeight = (svg: string) => Number(/^<svg [^>]* height="(\d+)">/.exec(svg)![1])
@@ -384,7 +387,7 @@ export const at = (f: number, content: string) => `<svg x="${pct(f)}" y="0" widt
 /** A text in its role's style; `fill` and `weight` only where state sets them. */
 const text = (x: number | string, y: number, s: string, o: { role?: Role; fill?: string; anchor?: string; weight?: number } = {}) => {
   const t = TEXT[o.role ?? 'axis']
-  return `<text x="${typeof x === 'number' ? x.toFixed(1) : x}" y="${y.toFixed(1)}" text-anchor="${o.anchor ?? 'start'}" style="fill:${o.fill ?? C[t.color]}" font-family="${FONT}" font-size="${t.rem}rem" font-weight="${o.weight ?? t.weight}">${esc(s)}</text>`
+  return `<text x="${typeof x === 'number' ? x.toFixed(1) : x}" y="${y.toFixed(1)}" text-anchor="${o.anchor ?? 'start'}" style="fill:${o.fill ?? C[t.color]}" font-family="${t.mono ? MONO : FONT}" font-size="${t.rem}rem" font-weight="${o.weight ?? t.weight}">${esc(s)}</text>`
 }
 
 /**
@@ -437,9 +440,9 @@ export function headerDraw(m: Model, title: string, width: number, pal: Palettes
     s += text(st.x, L.caption(st.row), st.label, { role: 'caption' })
     s += text(st.x, L.figure(st.row), st.value, { role: 'figure', ...(st.fill ? { fill: st.fill } : {}) })
     if (st.info) {
-      // the circle after the caption; the width estimate errs wide, so it's trimmed here
+      // the circle after the caption
       const r = px('caption') * 0.5
-      spot = { cx: st.x + textWidth(st.label, 'caption') * 0.9 + 6 + r, cy: L.caption(st.row) - px('caption') * 0.35, r }
+      spot = { cx: st.x + textWidth(st.label, 'caption') + 6 + r, cy: L.caption(st.row) - px('caption') * 0.35, r }
     }
   }
   return { svg: drawing(s, L.height, pal), height: L.height, ...(spot ? { info: spot } : {}) }
