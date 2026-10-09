@@ -298,11 +298,15 @@ export function modelsCosts(l: Learned, b: ModelCost | null, width: number, pal:
       // the meter runs from ±100% (nothing known) to ±20% (shown)
       const p = isFinite(m.rel) ? Math.max(0.04, Math.min(1, (1 - Math.min(m.rel, 1)) / (1 - SHOW_WITHIN))) : 0.04
       const note = `shows at ±20% · ${m.more ? `about ${comma(m.more)} more responses` : 'needs more responses'}`
-      const room = 1 - (tw(note, 11.5, true) + 12) / width
+      // the text sits at the right on a backing of the card's colour, as wide as the text and a 16px gap:
+      // the track runs under it and stops short of it, however wide the frame is drawn
+      const noteW = tw(note, 11.5, true) * 1.05, gapW = 16
+      const room = Math.max(0.2, 1 - (noteW + gapW) / width)
       const my = y + 11
-      s += `<rect x="0" y="${my - 3}" width="${pct(Math.max(0.2, room))}" height="6" rx="3" style="fill:${C.dim}" fill-opacity="0.14"/>`
-        + `<rect x="0" y="${my - 3}" width="${pct(Math.max(0.2, room) * p)}" height="6" rx="3" style="fill:${C.over}"/>`
-        + t('100%', my + 4, note, { size: 11.5, mono: true, fill: C.dim, anchor: 'end' })
+      s += `<rect x="0" y="${my - 3}" width="100%" height="6" rx="3" style="fill:${C.dim}" fill-opacity="0.14"/>`
+        + `<rect x="0" y="${my - 3}" width="${pct(room * p)}" height="6" rx="3" style="fill:${C.over}"/>`
+        + at(1, `<rect x="${-(noteW + gapW).toFixed(1)}" y="${my - 8}" width="${(noteW + gapW).toFixed(1)}" height="16" style="fill:${C.card}"/>`
+          + t(0, my + 4, note, { size: 11.5, mono: true, fill: C.dim, anchor: 'end' }))
       y = my + 9
     }
   })
