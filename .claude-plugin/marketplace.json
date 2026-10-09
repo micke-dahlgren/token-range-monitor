@@ -1,0 +1,5 @@
+{
+  "name": "token-range-monitor",
+  "owner": { "name": "micke-dahlgren" },
+  "plugins": [{ "name": "token-range-monitor", "source": "./" }]
+}
