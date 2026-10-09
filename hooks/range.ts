@@ -260,7 +260,7 @@ export function resetsIn(m: Model, fine: boolean): string {
 
 /** The name of an average, as its button shows it. */
 export const averageName = (avg: Average) =>
-  avg.type === 'reset' ? 'Since reset' : windowName(hoursToWindow(avg.hours))
+  avg.type === 'reset' ? 'Since reset' : avg.hours < 1 ? `${Math.round(avg.hours * 60)}m` : windowName(hoursToWindow(avg.hours))
 
 const hoursToWindow = (h: number): Pick<RangeSettings, 'n' | 'unit'> =>
   h % 24 === 0 ? { n: h / 24, unit: 'd' } : { n: h, unit: 'h' }
