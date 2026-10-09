@@ -52,12 +52,20 @@ async function loadAll($: EngineInterface) {
   await update($, seen, () => [...othersSeen, ...ownSeen])
 }
 
-/** Notes that this session is open and watching now, for telling usage seen here from usage made elsewhere. */
+/**
+ * Notes that this session just got fresh figures (a response arrived), for telling
+ * usage seen here from usage made elsewhere. Saved at most every 30 seconds.
+ */
+let seenSavedAt = 0
 async function watch($: EngineInterface) {
   const now = await $.clock.now()
   if (!ownKey) ownKey = newOwnKey(now)
+  const before = ownSeen.length
   ownSeen = heartbeat(ownSeen, now)
-  await $.store.set(seenKeyOf(ownKey), ownSeen)
+  if (ownSeen.length !== before || now - seenSavedAt > 30_000) {
+    seenSavedAt = now
+    await $.store.set(seenKeyOf(ownKey), ownSeen)
+  }
   await update($, seen, () => [...othersSeen, ...ownSeen])
 }
 
@@ -133,19 +141,24 @@ export const register: Register = on => {
     })
     await loadAll($)
     await capture($, (await $.session.usage()).rateLimits)
-    await watch($)
     // once a minute: pick up other sessions' readings and move "now" along
     $.clock.every(60_000, async () => {
       await loadAll($)
       await capture($, (await $.session.usage()).rateLimits)
-      await watch($)
       await update($, tick, n => n + 1)
     })
     return next(e)
   })
 
+  // a turn's end and each tool call both follow a response, so the figures are fresh then;
+  // the once-a-minute check above only re-reads the last response's figures, so it isn't watching
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('rateLimits')) await capture($, e.rateLimits)
+    await watch($)
+    return next(e)
+  })
+
+  on('tool.call', async ($, e, next) => {
     await watch($)
     return next(e)
   })

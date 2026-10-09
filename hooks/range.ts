@@ -72,11 +72,20 @@ export function merge(lists: ReadonlyArray<readonly RangeReading[]>, now: number
   return out.sort((a, b) => a[0] - b[0])
 }
 
-/** A stretch of time some session on this computer was open and taking readings: [from, to] in ms. */
+/**
+ * A stretch of time some session on this computer was getting fresh figures:
+ * its turns were getting responses from Claude, each carrying the account's
+ * current usage. An open but idle session gets none, so it isn't watching.
+ * [from, to] in ms.
+ */
 export type Watch = [number, number]
 
-/** Two heartbeats further apart than this leave a hole: the computer wasn't watching in between. */
-export const WATCH_GAP = 2.5 * MIN
+/**
+ * Two fresh figures further apart than this leave a hole: nothing here was
+ * watching in between. Long enough to span a pause while you read or type,
+ * short enough that an idle hour counts as away.
+ */
+export const WATCH_GAP = 15 * MIN
 
 /** Whether [a, b] lies wholly inside the watched spans. */
 export function isWatched(seen: readonly Watch[], a: number, b: number): boolean {

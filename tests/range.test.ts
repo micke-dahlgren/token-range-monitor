@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, increments, needsMore, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, heartbeat, increments, isWatched, needsMore, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
 
@@ -109,4 +109,16 @@ test('line labels move apart when their lines are close, and stay inside the plo
   expect(spreadLabels([20, 22], 28, 20, 200)).toEqual([20, 48])
   // close to the bottom edge: pushed up
   expect(spreadLabels([199, 200], 28, 20, 200)).toEqual([172, 200])
+})
+
+test('a session idle for longer than 15 minutes counts as not watching', async () => {
+  // responses ten minutes apart join into one watched stretch
+  let seen = heartbeat([], T0 - 60 * MIN)
+  seen = heartbeat(seen, T0 - 50 * MIN)
+  expect(seen.length).toBe(1)
+  // then the session sat idle for 50 minutes while another device was used
+  seen = heartbeat(seen, T0)
+  expect(seen.length).toBe(2)
+  expect(isWatched(seen, T0 - 60 * MIN, T0 - 50 * MIN)).toBe(true)
+  expect(isWatched(seen, T0 - 50 * MIN, T0)).toBe(false)
 })
