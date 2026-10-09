@@ -329,6 +329,41 @@ export function headerSvg(m: Model, title: string, width: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${H}" width="${width}" height="${H}">${s}</svg>`
 }
 
+/**
+ * Moves labels apart so none overlap: each sits as near its own line as it can.
+ * Labels that would collide are grouped and centred on their lines' average,
+ * then the whole stack is kept between `lo` and `hi`. `ys` are the lines'
+ * heights; the result is in the same order.
+ */
+export function spreadLabels(ys: readonly number[], gap: number, lo: number, hi: number): number[] {
+  const order = ys.map((y, i) => ({ y, i })).sort((a, b) => a.y - b.y)
+  // clusters of labels that share space, each centred on its members' lines
+  let groups = order.map(o => ({ members: [o], top: o.y }))
+  const place = (g: { members: { y: number }[] }) =>
+    g.members.reduce((a, m) => a + m.y, 0) / g.members.length - (g.members.length - 1) * gap / 2
+  for (let changed = true; changed;) {
+    changed = false
+    for (let k = 1; k < groups.length; k++) {
+      const a = groups[k - 1]!, b = groups[k]!
+      if (a.top + a.members.length * gap > b.top) {
+        const merged = { members: [...a.members, ...b.members], top: 0 }
+        merged.top = place(merged)
+        groups.splice(k - 1, 2, merged)
+        changed = true
+        break
+      }
+    }
+  }
+  const out = new Array<number>(ys.length)
+  const flat: { i: number; y: number }[] = []
+  for (const g of groups) g.members.forEach((m, j) => flat.push({ i: (m as { i: number }).i, y: g.top + j * gap }))
+  // keep the stack inside the plot, pushing neighbours along
+  for (let k = 0; k < flat.length; k++) flat[k]!.y = Math.max(flat[k]!.y, lo + k * gap)
+  for (let k = flat.length - 1; k >= 0; k--) flat[k]!.y = Math.min(flat[k]!.y, hi - (flat.length - 1 - k) * gap)
+  for (const f of flat) out[f.i] = f.y
+  return out
+}
+
 export type ChartSpec = {
   width: number
   height: number
@@ -387,9 +422,14 @@ export function chartSvg(c: ChartSpec): string {
     s += `<rect x="${x0}" y="${padT + 1}" width="${x1 - x0}" height="${base - padT - 2}" fill="url(#nr)"/>`
     if (x1 - x0 > 90) s += text((x0 + x1) / 2, base - 10, 'not watched', { anchor: 'middle' })
   }
+  let late = ''   // labels drawn last, over the bars
   for (const mk of c.marks) {
     s += `<line x1="${X(mk.f)}" x2="${X(mk.f)}" y1="${padT}" y2="${base}" stroke="${C.dim}" stroke-dasharray="3 3"/>`
-    s += text(X(mk.f) + 5, padT + 16, `↺ ${mk.label}`, { fill: C.fg })
+    const w = (mk.label.length + 2) * 7.6 + 10
+    // near the right edge the label goes on the left of its line, clear of the line labels
+    const rx = X(mk.f) + 3 + w > right - 190 ? X(mk.f) - 3 - w : X(mk.f) + 3
+    late += `<rect x="${rx}" y="${padT + 4}" width="${w}" height="18" rx="5" fill="${C.card}" fill-opacity="0.92"/>`
+    late += text(rx + 5, padT + 17, `↺ ${mk.label}`, { fill: C.fg })
   }
   const slot = (right - padL) / Math.max(1, c.bars.length), bw = Math.max(2, slot * 0.5)
   const firstRecorded = c.unrecorded * c.bars.length
@@ -404,16 +444,20 @@ export function chartSvg(c: ChartSpec): string {
   })
   const limitOff = c.limit > top
   const yl = limitOff ? Y(top) : Y(c.limit)
-  const limitLabel = `limit ${fx(c.limit)}${limitOff ? ' ▲' : ''}`
-  const labelW = limitLabel.length * 8.6 + 12
-  s += `<line x1="${padL}" x2="${right - labelW - 4}" y1="${yl}" y2="${yl}" stroke="${C.limit}" stroke-width="2.5"/>`
-  s += text(right - 6, yl + 6, limitLabel, { size: 16, fill: C.limit, anchor: 'end' })
-  if (c.avg !== null) {
-    const ya = Y(c.avg)
-    s += `<line x1="${padL}" x2="${right}" y1="${ya}" y2="${ya}" stroke="${C.fg}" stroke-width="3" stroke-dasharray="3 5" stroke-linecap="round"/>`
-    const aY = Math.abs(ya - yl) < 26 && ya > yl ? ya + 22 : ya - 10
-    s += text(right - 6, aY, `average ${fx(c.avg)}`, { size: 16, fill: C.fg, anchor: 'end' })
+  const ya = c.avg !== null ? Y(c.avg) : null
+  s += `<line x1="${padL}" x2="${right}" y1="${yl}" y2="${yl}" stroke="${C.limit}" stroke-width="2.5"/>`
+  if (ya !== null) s += `<line x1="${padL}" x2="${right}" y1="${ya}" y2="${ya}" stroke="${C.fg}" stroke-width="3" stroke-dasharray="3 5" stroke-linecap="round"/>`
+  // the labels sit on their lines, each on a backing in the card's colour so bars and lines behind don't show through
+  const label = (y: number, s2: string, fill: string) => {
+    const w = s2.length * 8.8 + 16, h = 24, x = right - 4 - w
+    return `<rect x="${x.toFixed(1)}" y="${(y - h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h}" rx="6" fill="${C.card}" fill-opacity="0.92"/>`
+      + text(right - 12, y + 5.5, s2, { size: 16, fill, anchor: 'end' })
   }
+  // keep the labels clear of each other and inside the plot
+  const [lY, aY] = spreadLabels(ya === null ? [yl] : [yl, ya], 28, padT + 14, base - 14)
+  s += late
+  s += label(lY!, `limit ${fx(c.limit)}${limitOff ? ' ▲' : ''}`, C.limit)
+  if (aY !== undefined && c.avg !== null) s += label(aY, `average ${fx(c.avg)}`, C.fg)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${Hh}" width="${W}" height="${Hh}">${s}</svg>`
 }
 

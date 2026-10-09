@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, increments, needsMore, parseWindow, project, resetsIn, signed, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, increments, needsMore, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
 
@@ -97,4 +97,16 @@ test('window text parses', async () => {
   expect(parseWindow('2w')).toBe(null)
   expect(parseWindow('9w')).toBe(null)
   expect(parseWindow('soon')).toBe(null)
+})
+
+test('line labels move apart when their lines are close, and stay inside the plot', async () => {
+  // far apart: each stays on its line
+  expect(spreadLabels([50, 150], 28, 20, 200)).toEqual([50, 150])
+  // close: centred on the two lines, a full gap apart, in the lines' order
+  expect(spreadLabels([100, 110], 28, 20, 200)).toEqual([91, 119])
+  expect(spreadLabels([110, 100], 28, 20, 200)).toEqual([119, 91])
+  // close to the top edge: the pair is pushed down inside the plot
+  expect(spreadLabels([20, 22], 28, 20, 200)).toEqual([20, 48])
+  // close to the bottom edge: pushed up
+  expect(spreadLabels([199, 200], 28, 20, 200)).toEqual([172, 200])
 })
