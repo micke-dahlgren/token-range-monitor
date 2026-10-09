@@ -28,10 +28,10 @@ claude plugin update token-range-monitor
 
 **Above the prompt**, one line:
 
-> Left at week reset **−25%** · Resets in 3.7 days · Left at 5h reset **+12%** · Details
+> Left at week reset **−25%** · Resets in 3.7 days · Left at 5h reset **+12%** · Resets in 2.4 hours · Details
 
 - **Left at reset** is what's projected to remain of the limit when it resets, at your current rate. A positive value (green) means you'll make it with that much to spare. A negative value (red) means you'd need that much more than you have.
-- Click **Resets in…** to switch between days and hours (or hours and minutes for the 5-hour window).
+- Click **Resets in…** to switch between days and hours (or hours and minutes for the 5-hour window). Under an hour, the 5-hour countdown is in minutes.
 - **Details** opens the pane.
 
 **The pane** has one card per limit, showing:

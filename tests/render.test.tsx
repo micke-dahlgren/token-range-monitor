@@ -82,23 +82,27 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   expect(await note()).toBe('Average over the last 6d.')
   await pane.unmount()
 
-  // the charts take the pane's width and share its height, so a shorter pane draws shorter charts
+  // the charts fill the card's width, and their height follows it
   const charts = async (bodyColumns: number, bodyRows: number) => {
     const p = await $.ui.mount({
       plugin: 'token-range-monitor', surface: 'desktop', component: 'Pane', requestId: 'token-range-monitor',
       props: { title: 'Token Range Monitor', isFocused: false, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows, contentRows: bodyRows } } as never,
     })
-    // the charts alone, by their plot
-    const svgs = (await p.findAll({ type: 'Svg' })).filter(x => String(x.props.source).includes('id="plot"'))
+    const all = await p.findAll({ type: 'Svg' })
     await p.unmount()
-    return svgs.map(x => [Number(/ width="(\d+)"/.exec(String(x.props.source))?.[1]), /height="(\d+)"/.exec(String(x.props.source))?.[1]])
+    // every drawing fills its frame's width at its own height: framed, its height given, no scaling viewBox
+    for (const x of all) {
+      expect(x.props.isInteractive).toBe(true)
+      expect(String(x.props.source)).not.toContain('viewBox')
+      expect(String(x.props.source)).toContain(':root{width:100%')
+      // every text placed: no empty coordinates
+      expect(String(x.props.source)).not.toMatch(/ [xy]=""/)
+    }
+    // the weekly drawing (head and chart, with its plot) by its height
+    return all.filter(x => String(x.props.source).includes('id="plot"')).map(x => Number(x.props.height))
   }
-  const tall = await charts(100, 90), short = await charts(100, 60), wide = await charts(200, 60)
-  expect(tall[0]![0]).toBe(765)
-  // the charts take all the height left: a taller pane, taller charts
-  expect(Number(tall[0]![1])).toBeGreaterThan(Number(short[0]![1]) + 300)
-  expect(wide[0]![0]).toBe(1545)
-  // wider, the chart stays as tall (a little taller once the countdown no longer wraps): it doesn't scale with the width
-  expect(Number(wide[0]![1])).toBeGreaterThanOrEqual(Number(short[0]![1]))
-  expect(Number(wide[0]![1])).toBeLessThan(Number(short[0]![1]) + 60)
+  const narrow = await charts(60, 50), wide = await charts(160, 50), wideTaller = await charts(160, 120)
+  // the chart's height follows the card's width, not the pane's reported rows
+  expect(wide[0]!).toBeGreaterThan(narrow[0]! + 60)
+  expect(wideTaller[0]).toBe(wide[0])
 })

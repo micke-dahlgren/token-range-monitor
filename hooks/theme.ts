@@ -176,7 +176,9 @@ export const v = (key: PaletteKey) => `var(--${key})`
 export function paletteStyle(p: Palettes): string {
   const vars = (pal: Palette) => Object.entries(pal).map(([key, val]) => `--${key}:${val}`).join(';')
   const other = p.own === 'dark' ? 'light' : 'dark'
-  return `<style>svg{${vars(p[p.own])}}@media (prefers-color-scheme:${other}){svg{${vars(p[other])}}}</style>`
+  // shown in a frame, a drawing is a page of its own: one that doesn't say it can be dark gets an opaque
+  // white backdrop in a dark app, so each says it suits both, and stays see-through
+  return `<style>:root{color-scheme:light dark;background:transparent}svg{${vars(p[p.own])}}@media (prefers-color-scheme:${other}){svg{${vars(p[other])}}}</style>`
 }
 
 /** The theme a `theme` setting names: a preset, `auto`, or `custom:<slug>`, read by `readFile`. */

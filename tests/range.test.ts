@@ -102,6 +102,14 @@ test('reset countdown switches units', async () => {
   expect(resetsIn(m, true)).toBe('Resets in 89 hours')
 })
 
+test("the 5-hour countdown reads in hours, and in minutes under an hour", async () => {
+  const five = (left: number) => project([[T0 - HOUR, 0, 10, T0 + left * HOUR], [T0, 0, 12, T0 + left * HOUR]], 'five', T0, { type: 'reset' })!
+  expect(resetsIn(five(2.5), false)).toBe('Resets in 2.5 hours')
+  expect(resetsIn(five(2.5), true)).toBe('Resets in 150 minutes')
+  expect(resetsIn(five(0.4), false)).toBe('Resets in 24 minutes')
+  expect(resetsIn(five(1 / 60), false)).toBe('Resets in 1 minute')
+})
+
 test('window text parses', async () => {
   expect(parseWindow('2d')).toEqual({ n: 2, unit: 'd' })
   expect(parseWindow('6 hours')).toEqual({ n: 6, unit: 'h' })

@@ -284,7 +284,10 @@ export function dur(h: number): string {
 /** "Resets in 3.7 days" / "Resets in 89 hours", and for the 5-hour window hours / minutes. */
 export function resetsIn(m: Model, fine: boolean): string {
   if (m.kind === 'week') return fine ? `Resets in ${Math.round(m.left)} hours` : `Resets in ${fx(m.left / 24)} days`
-  return fine ? `Resets in ${Math.round(m.left * 60)} minutes` : `Resets in ${fx(m.left)} hours`
+  // under an hour, hours read as "0.4 hours": minutes then, whichever unit was picked
+  const minutes = Math.round(m.left * 60)
+  if (fine || m.left < 1) return `Resets in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`
+  return `Resets in ${fx(m.left)} hours`
 }
 
 /** The name of an average, as its button shows it. */
@@ -360,10 +363,28 @@ const px = (role: Role) => TEXT[role].rem * 16
 /** About how wide a text runs, for laying out around it. */
 const textWidth = (str: string, role: Role) => str.length * px(role) * (TEXT[role].weight >= 600 ? 0.6 : 0.55)
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+/**
+ * The width a drawing tells the app it has. The app shows each drawing in a
+ * frame as wide as its slot, up to this; inside, the drawing fills the frame
+ * (`:root{width:100%}`) and is laid out in percentages and pixels, never a
+ * viewBox, so it stretches to any width while its text stays the size set.
+ */
+const FRAME_W = 2000
+/** A drawing of `content`, `height` pixels tall, filling whatever width its frame has. */
+export function drawing(content: string, height: number, pal: Palettes = DEFAULT_PALETTES): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${FRAME_W}" height="${Math.ceil(height)}"><style>:root{width:100%;height:100%;overflow:hidden}</style>${paletteStyle(pal)}${content}</svg>`
+}
+/** A drawing's height: what its frame is given. */
+export const drawingHeight = (svg: string) => Number(/^<svg [^>]* height="(\d+)">/.exec(svg)![1])
+/** A share of the width, as a length. */
+const pct = (f: number) => `${(f * 100).toFixed(3)}%`
+/** Content placed with its origin at a share of the width (1: the right edge); it draws at negative x to sit left of it. */
+const at = (f: number, content: string) => `<svg x="${pct(f)}" y="0" width="1" height="1" overflow="visible">${content}</svg>`
+
 /** A text in its role's style; `fill` and `weight` only where state sets them. */
-const text = (x: number, y: number, s: string, o: { role?: Role; fill?: string; anchor?: string; weight?: number } = {}) => {
+const text = (x: number | string, y: number, s: string, o: { role?: Role; fill?: string; anchor?: string; weight?: number } = {}) => {
   const t = TEXT[o.role ?? 'axis']
-  return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${o.anchor ?? 'start'}" style="fill:${o.fill ?? C[t.color]}" font-family="${FONT}" font-size="${t.rem}rem" font-weight="${o.weight ?? t.weight}">${esc(s)}</text>`
+  return `<text x="${typeof x === 'number' ? x.toFixed(1) : x}" y="${y.toFixed(1)}" text-anchor="${o.anchor ?? 'start'}" style="fill:${o.fill ?? C[t.color]}" font-family="${FONT}" font-size="${t.rem}rem" font-weight="${o.weight ?? t.weight}">${esc(s)}</text>`
 }
 
 /**
@@ -371,16 +392,32 @@ const text = (x: number, y: number, s: string, o: { role?: Role; fill?: string; 
  * and the three figures. The reset countdown beside it is a Button, not drawn here.
  */
 /** Where the head's lines sit: the title, the warning, the captions and the figures, and its height. */
-function headLayout(m: Model) {
+function headLayout(m: Model, width: number, pace?: Pace) {
   const isOver = m.over && !m.noData
   const title = px('title')
   const warning = isOver ? title + px('warning') * 1.6 : title
-  const caption = warning + px('caption') * 2
-  const figure = caption + px('figure') * 1.5
-  return { isOver, title, warning, caption, figure, height: Math.ceil(figure + px('figure') * 0.4) }
+  const stats: Array<{ label: string; value: string; fill?: string; info: boolean; w: number; x: number; row: number }> = []
+  const add = (label: string, value: string, fill: string | undefined, info = false) =>
+    stats.push({ label, value, ...(fill ? { fill } : {}), info, w: Math.max(textWidth(label, 'caption') + (info ? px('caption') + 6 : 0), textWidth(value, 'figure')), x: 0, row: 0 })
+  // the left-at-reset figure is coloured by its state; the others take the figure role's colour
+  add(m.kind === 'week' ? 'Left at week reset' : 'Left at 5h reset', m.noData ? 'No data' : signed(m.arrive), m.noData ? C.dim : m.over ? C.bad : C.under)
+  add('Average', m.noData ? 'No data' : rateText(m, m.rate), m.noData ? C.dim : undefined)
+  add('Limit', rateText(m, m.limit), undefined)
+  if (pace) add(PACE_LABEL, pace.ready ? `${fx(pace.rate * 24)}%/day` : 'No data', pace.ready ? undefined : C.dim, true)
+  // the figures flow left to right, onto another row where the card is too narrow for the next
+  const gap = px('figure') * 1.5
+  let x = 0, row = 0
+  for (const st of stats) {
+    if (x > 0 && x + st.w > width) { x = 0; row++ }
+    st.x = x; st.row = row
+    x += st.w + gap
+  }
+  const step = px('caption') * 1.6 + px('figure') * 1.5 + 6
+  const caption = (r: number) => warning + px('caption') * 2 + r * step
+  const figure = (r: number) => caption(r) + px('figure') * 1.5
+  return { isOver, title, warning, stats, caption, figure, height: Math.ceil(figure(row) + px('figure') * 0.4) }
 }
-
-export const headerHeight = (m: Model) => headLayout(m).height
+export const headerHeight = (m: Model, width = 1e9, pace?: Pace) => headLayout(m, width, pace).height
 
 /** Where the head's info circle sits, in drawn pixels: what the drawing around it places the tooltip by. */
 export type InfoSpot = { cx: number; cy: number; r: number }
@@ -391,44 +428,23 @@ export type InfoSpot = { cx: number; cy: number; r: number }
  * itself is drawn by `withInfo`, which can open its tooltip over the chart.
  */
 export function headerDraw(m: Model, title: string, width: number, pal: Palettes = DEFAULT_PALETTES, countdown = '', pace?: Pace): { svg: string; height: number; info?: InfoSpot } {
-  const L = headLayout(m)
+  const L = headLayout(m, width, pace)
   let s = text(0, L.title, title, { role: 'title' })
   if (L.isOver) s += text(0, L.warning, runsOut(m), { role: 'warning' })
-  // the left-at-reset figure is coloured by its state; the others take the figure role's colour
-  const stats: Array<[string, string, string | undefined]> = [
-    [m.kind === 'week' ? 'Left at week reset' : 'Left at 5h reset', m.noData ? 'No data' : signed(m.arrive), m.noData ? C.dim : m.over ? C.bad : C.under],
-    ['Average', m.noData ? 'No data' : rateText(m, m.rate), m.noData ? C.dim : undefined],
-    ['Limit', rateText(m, m.limit), undefined],
-  ]
-  if (pace) stats.push([PACE_LABEL, pace.ready ? `${fx(pace.rate * 24)}%/day` : 'No data', pace.ready ? undefined : C.dim])
-  const r = px('caption') * 0.5
-  let x = 0, end = 0, spot: InfoSpot | undefined
-  for (const [label, value, fill] of stats) {
-    s += text(x, L.caption, label, { role: 'caption' })
-    s += text(x, L.figure, value, { role: 'figure', ...(fill ? { fill } : {}) })
-    let labelEnd = textWidth(label, 'caption')
-    if (label === PACE_LABEL) {
-      // room for the circle after the caption; the width estimate errs wide, so it's trimmed here
-      const cx = x + labelEnd * 0.9 + 6 + r
-      spot = { cx, cy: L.caption - px('caption') * 0.35, r }
-      labelEnd = cx + r - x
-    }
-    end = x + Math.max(labelEnd, textWidth(value, 'figure'))
-    x = end + px('figure') * 1.5
-  }
   // the countdown sits at the right on the title's line
-  const titleEnd = textWidth(title, 'title') + px('title')
-  // wider than the room, the head is drawn whole and scaled to fit rather than cut off
-  const W = Math.max(width, Math.ceil(end) + 4, Math.ceil(titleEnd + textWidth(countdown, 'countdown')) + 4), H = L.height
-  if (countdown) s += text(W - 2, L.title, countdown, { role: 'countdown', anchor: 'end' })
-  const k = width / W, height = Math.round(H * k)
-  return {
-    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${width}" height="${height}">${paletteStyle(pal)}${s}</svg>`,
-    height,
-    ...(spot ? { info: { cx: spot.cx * k, cy: spot.cy * k, r: spot.r * k } } : {}),
+  if (countdown) s += text('100%', L.title, countdown, { role: 'countdown', anchor: 'end' })
+  let spot: InfoSpot | undefined
+  for (const st of L.stats) {
+    s += text(st.x, L.caption(st.row), st.label, { role: 'caption' })
+    s += text(st.x, L.figure(st.row), st.value, { role: 'figure', ...(st.fill ? { fill: st.fill } : {}) })
+    if (st.info) {
+      // the circle after the caption; the width estimate errs wide, so it's trimmed here
+      const r = px('caption') * 0.5
+      spot = { cx: st.x + textWidth(st.label, 'caption') * 0.9 + 6 + r, cy: L.caption(st.row) - px('caption') * 0.35, r }
+    }
   }
+  return { svg: drawing(s, L.height, pal), height: L.height, ...(spot ? { info: spot } : {}) }
 }
-
 export const headerSvg = (m: Model, title: string, width: number, pal: Palettes = DEFAULT_PALETTES, countdown = '') =>
   headerDraw(m, title, width, pal, countdown).svg
 
@@ -494,95 +510,92 @@ export type ChartSpec = {
  * tallest bar sits on the top edge, its label marked ▲.
  */
 export function chartSvg(c: ChartSpec): string {
-  const W = c.width, Hh = c.height
+  const est = c.width, Hh = c.height
   const ax = px('axis')
-  const padL = Math.ceil(textWidth('00.0', 'axis') + 16), padR = 1, padT = Math.ceil(ax * 1.5 + 12), padB = Math.ceil(ax * 1.5 + 12)
+  const padT = Math.ceil(ax * 1.5 + 12), padB = Math.ceil(ax * 1.5 + 12)
   const peak = Math.max(...c.bars, c.avg ?? 0, c.estimate ?? 0, 0.0001) * 1.04
   const top = peak >= 10 ? Math.ceil(peak / 2) * 2 : peak
-  const X = (f: number) => padL + f * (W - padL - padR)
   const Y = (v: number) => Hh - padB - Math.min(v, top) / top * (Hh - padT - padB)
-  const base = Y(0), right = X(1)
+  const base = Y(0)
   const num = (v: number) => (top >= 10 ? String(Math.round(v)) : fx(v))
+  const veil = (x: number, y: number, w: number, h: number, r = 5) =>
+    `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="${r}" style="fill:${C.veil}" fill-opacity="0.6"/>`
   let s = `<defs>
     <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${C.barTop}"/><stop offset="1" style="stop-color:${C.barBottom}"/></linearGradient>
     <linearGradient id="plot" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:${C.dim}" stop-opacity="0"/><stop offset="1" style="stop-color:${C.dim}" stop-opacity="0.07"/></linearGradient>
     <pattern id="nr" width="16" height="16" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="16" style="stroke:${C.dim}" stroke-opacity="0.16" stroke-width="2.5"/></pattern>
   </defs>`
-  s += text(padL + 10, padT - ax * 0.6, c.unitLabel)
-  s += `<rect x="${padL}" y="${padT}" width="${right - padL}" height="${base - padT}" rx="6" fill="url(#plot)"/>`
+  s += text(2, padT - ax * 0.6, c.unitLabel)
+  s += `<rect x="0" y="${padT}" width="100%" height="${base - padT}" rx="6" fill="url(#plot)"/>`
   for (const g of [top / 4, top / 2, top * 3 / 4]) {
-    s += `<line x1="${padL}" x2="${right}" y1="${Y(g)}" y2="${Y(g)}" style="stroke:${C.dim}" stroke-opacity="0.18"/>`
+    s += `<line x1="0" x2="100%" y1="${Y(g)}" y2="${Y(g)}" style="stroke:${C.dim}" stroke-opacity="0.18"/>`
   }
-  for (const g of [0, top / 2, top]) s += text(padL - 12, Y(g) + ax * 0.35, num(g), { anchor: 'end' })
   for (const tk of c.xTicks) {
-    if (tk.f > 0 && tk.f < 1) s += `<line x1="${X(tk.f)}" x2="${X(tk.f)}" y1="${padT}" y2="${base}" style="stroke:${C.dim}" stroke-opacity="0.18" stroke-dasharray="4 4"/>`
+    if (tk.f > 0 && tk.f < 1) s += `<line x1="${pct(tk.f)}" x2="${pct(tk.f)}" y1="${padT}" y2="${base}" style="stroke:${C.dim}" stroke-opacity="0.18" stroke-dasharray="4 4"/>`
     const isNow = tk.f >= 1
-    s += text(X(tk.f), Hh - ax * 0.6, tk.label, { anchor: isNow ? 'end' : tk.f <= 0 ? 'start' : 'middle', ...(isNow ? { fill: C.fg, weight: 600 } : {}) })
+    s += text(pct(tk.f), Hh - ax * 0.6, tk.label, { anchor: isNow ? 'end' : tk.f <= 0 ? 'start' : 'middle', ...(isNow ? { fill: C.fg, weight: 600 } : {}) })
   }
   if (c.unrecorded > 0 && c.estimate === undefined) {
-    const x1 = X(c.unrecorded)
-    s += `<rect x="${padL + 1}" y="${padT + 1}" width="${Math.max(0, x1 - padL - 1)}" height="${base - padT - 2}" fill="url(#nr)"/>`
-    if (x1 - padL > 90) s += text((padL + x1) / 2, base - ax * 0.6, 'not recorded', { anchor: 'middle' })
+    s += `<rect x="0" y="${padT + 1}" width="${pct(c.unrecorded)}" height="${base - padT - 2}" fill="url(#nr)"/>`
+    if (c.unrecorded * est > 90) s += text(pct(c.unrecorded / 2), base - ax * 0.6, 'not recorded', { anchor: 'middle' })
   }
   for (const [f0, f1] of c.holes) {
-    const x0 = X(Math.max(f0, c.unrecorded)), x1 = X(f1)
-    if (x1 - x0 < 1) continue
-    s += `<rect x="${x0}" y="${padT + 1}" width="${x1 - x0}" height="${base - padT - 2}" fill="url(#nr)"/>`
-    if (x1 - x0 > 90) s += text((x0 + x1) / 2, base - ax * 0.6, 'not watched', { anchor: 'middle' })
+    const a = Math.max(f0, c.unrecorded)
+    if ((f1 - a) * est < 1) continue
+    s += `<rect x="${pct(a)}" y="${padT + 1}" width="${pct(f1 - a)}" height="${base - padT - 2}" fill="url(#nr)"/>`
+    if ((f1 - a) * est > 90) s += text(pct((a + f1) / 2), base - ax * 0.6, 'not watched', { anchor: 'middle' })
   }
   let late = ''   // labels drawn last, over the bars
   // the faint bars: Anthropic's total for the time before this computer kept a record, spread evenly
   const NOTE = 'Estimated: used before tracking started'
-  if (c.estimate !== undefined && X(c.unrecorded) - padL > textWidth(NOTE, 'axis') + 30) {
+  if (c.estimate !== undefined && c.unrecorded * est > textWidth(NOTE, 'axis') + 30) {
     const w = textWidth(NOTE, 'axis') + 14, h = ax + 6
-    late += `<rect x="${padL + 6}" y="${base - 6 - h}" width="${w}" height="${h}" rx="5" style="fill:${C.veil}" fill-opacity="0.6"/>`
-    late += text(padL + 13, base - 6 - h / 2 + ax * 0.35, NOTE)
+    late += veil(6, base - 6 - h, w, h) + text(13, base - 6 - h / 2 + ax * 0.35, NOTE)
   }
   for (const mk of c.marks) {
-    s += `<line x1="${X(mk.f)}" x2="${X(mk.f)}" y1="${padT}" y2="${base}" style="stroke:${C.dim}" stroke-dasharray="3 3"/>`
+    s += `<line x1="${pct(mk.f)}" x2="${pct(mk.f)}" y1="${padT}" y2="${base}" style="stroke:${C.dim}" stroke-dasharray="3 3"/>`
     const w = textWidth(`↺ ${mk.label}`, 'axis') + 12, h = ax + 6
     // near the right edge the label goes on the left of its line, clear of the line labels
-    const rx = X(mk.f) + 3 + w > right - 190 ? X(mk.f) - 3 - w : X(mk.f) + 3
-    late += `<rect x="${rx}" y="${padT + 4}" width="${w}" height="${h}" rx="5" style="fill:${C.veil}" fill-opacity="0.6"/>`
-    late += text(rx + 6, padT + 4 + h / 2 + ax * 0.35, `↺ ${mk.label}`, { fill: C.fg })
+    const rx = mk.f * est + 3 + w > est - 190 ? -3 - w : 3
+    late += at(mk.f, veil(rx, padT + 4, w, h) + text(rx + 6, padT + 4 + h / 2 + ax * 0.35, `↺ ${mk.label}`, { fill: C.fg }))
   }
-  const slot = (right - padL) / Math.max(1, c.bars.length), bw = Math.max(2, slot * 0.5)
+  // the scale, inside the plot at its left, on a backing so bars don't run through it
+  for (const g of [top / 2, top]) {
+    const y = Y(g) + ax + 4, label = num(g)
+    late += veil(4, y - ax - 1, textWidth(label, 'axis') + 8, ax + 6, 4) + text(8, y, label)
+  }
+  const n = Math.max(1, c.bars.length)
   const firstRecorded = c.unrecorded * c.bars.length
-  const bar = (cx: number, v: number, faint: boolean) => {
+  const bar = (i: number, v: number, faint: boolean) => {
     const y = Y(v)
-    return `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, base - y).toFixed(1)}" rx="1.5" fill="url(#bar)"${faint ? ' fill-opacity="0.35"' : ''}/>`
+    return `<rect x="${pct((i + 0.25) / n)}" y="${y.toFixed(1)}" width="${pct(0.5 / n)}" height="${Math.max(0, base - y).toFixed(1)}" rx="1.5" fill="url(#bar)"${faint ? ' fill-opacity="0.35"' : ''}/>`
   }
   c.bars.forEach((v, i) => {
-    const x0 = padL + slot * i, cx = x0 + slot / 2
     // before recording, the usage Anthropic's figure accounts for, spread evenly: faint
-    const est = c.estimate !== undefined ? c.estimate * Math.min(1, Math.max(0, firstRecorded - i)) : 0
-    if (est > 0) s += bar(cx, est + v, true)
-    if (v > 0) {
-      const y = Y(v)
-      s += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, base - y).toFixed(1)}" rx="1.5" fill="url(#bar)"/>`
-    } else if (i + 1 > firstRecorded && est === 0) {
-      s += `<line x1="${(x0 + 3).toFixed(1)}" x2="${(x0 + slot - 3).toFixed(1)}" y1="${base - 1}" y2="${base - 1}" style="stroke:${C.barBottom}" stroke-width="1.5" stroke-dasharray="5 4"/>`
+    const est2 = c.estimate !== undefined ? c.estimate * Math.min(1, Math.max(0, firstRecorded - i)) : 0
+    if (est2 > 0) s += bar(i, est2 + v, true)
+    if (v > 0) s += bar(i, v, false)
+    else if (i + 1 > firstRecorded && est2 === 0) {
+      s += `<line x1="${pct(i / n)}" x2="${pct((i + 1) / n)}" y1="${base - 1}" y2="${base - 1}" style="stroke:${C.barBottom}" stroke-width="1.5" stroke-dasharray="5 4"/>`
     }
   })
   const limitOff = c.limit > top
   const yl = limitOff ? Y(top) : Y(c.limit)
   const ya = c.avg !== null ? Y(c.avg) : null
-  s += `<line x1="${padL}" x2="${right}" y1="${yl}" y2="${yl}" style="stroke:${C.limit}" stroke-width="2.5"/>`
-  if (ya !== null) s += `<line x1="${padL}" x2="${right}" y1="${ya}" y2="${ya}" style="stroke:${C.fg}" stroke-width="3" stroke-dasharray="3 5" stroke-linecap="round"/>`
-  // the labels sit on their lines, each on a backing in the card's colour so bars and lines behind don't show through
+  s += `<line x1="0" x2="100%" y1="${yl}" y2="${yl}" style="stroke:${C.limit}" stroke-width="2.5"/>`
+  if (ya !== null) s += `<line x1="0" x2="100%" y1="${ya}" y2="${ya}" style="stroke:${C.fg}" stroke-width="3" stroke-dasharray="3 5" stroke-linecap="round"/>`
+  // the labels sit on their lines at the right edge, each on a backing so bars and lines behind don't show through
   const label = (y: number, s2: string, fill?: string) => {
-    const w = textWidth(s2, 'line') + 16, h = px('line') + 8, x = right - 4 - w
-    return `<rect x="${x.toFixed(1)}" y="${(y - h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h}" rx="6" style="fill:${C.veil}" fill-opacity="0.6"/>`
-      + text(right - 12, y + px('line') * 0.35, s2, { role: 'line', anchor: 'end', ...(fill ? { fill } : {}) })
+    const w = textWidth(s2, 'line') + 16, h = px('line') + 8
+    return at(1, veil(-4 - w, y - h / 2, w, h, 6) + text(-12, y + px('line') * 0.35, s2, { role: 'line', anchor: 'end', ...(fill ? { fill } : {}) }))
   }
   // keep the labels clear of each other and inside the plot
   const [lY, aY] = spreadLabels(ya === null ? [yl] : [yl, ya], px('line') + 12, padT + px('line') / 2 + 6, base - px('line') / 2 - 6)
   s += late
   s += label(lY!, `limit ${fx(c.limit)}${limitOff ? ' ▲' : ''}`, C.limit)
   if (aY !== undefined && c.avg !== null) s += label(aY, `average ${fx(c.avg)}`)
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${Hh}" width="${W}" height="${Hh}">${paletteStyle(c.palettes ?? DEFAULT_PALETTES)}${s}</svg>`
+  return drawing(s, Hh, c.palettes ?? DEFAULT_PALETTES)
 }
-
 /** The weekly chart for model `m` at `now`. */
 export function weekChart(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES, height = 400): string {
   return timeChart(m, now, width, height, pal)
@@ -603,7 +616,6 @@ export const CHART_NEEDS_H = { week: 6, five: 0.5 }
 /** Hours until the chart has enough recorded behind it; 0 once it has. */
 export const chartWait = (m: Model, now: number) => Math.max(0, CHART_NEEDS_H[m.kind] - (now - m.recordedFrom) / HOUR)
 
-export const EMPTY_H = 84
 
 /**
  * What the empty state says in the chart's place, or null when there is a
@@ -628,16 +640,26 @@ export function emptyChartText(m: Model, now: number): [string, string] | null {
 }
 
 /** In the chart's place until it has enough behind it: what it waits for, and how long that takes. */
-export function emptyChartSvg(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+function emptyLayout(m: Model, now: number, width: number) {
   const [head, sub] = emptyChartText(m, now) ?? ['', '']
-  // a narrow card scales the box down rather than cutting the line
-  const W = Math.max(width, Math.ceil(textWidth(sub, 'note')) + 24)
-  const s = `<rect x="1" y="1" width="${W - 2}" height="${EMPTY_H - 2}" rx="8" fill="none" style="stroke:${C.dim}" stroke-opacity="0.35" stroke-dasharray="4 5"/>`
-    + text(W / 2, EMPTY_H / 2 - 4, head, { role: 'caption', anchor: 'middle', fill: C.fg })
-    + text(W / 2, EMPTY_H / 2 + px('note') + 6, sub, { role: 'note', anchor: 'middle' })
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${EMPTY_H}" width="${width}" height="${Math.round(EMPTY_H * width / W)}">${paletteStyle(pal)}${s}</svg>`
+  const lines = wrap(sub, Math.max(160, width - 32), 'note')
+  const top = 24 + px('caption')
+  return { head, lines, top, height: Math.ceil(top + 10 + linesHeight(lines.length, 'note') + 18) }
 }
 
+/** How tall the empty state draws at `width`. */
+export const emptyChartHeight = (m: Model, now: number, width: number) => emptyLayout(m, now, width).height
+
+export function emptyChartSvg(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+  const L = emptyLayout(m, now, width), H = L.height
+  // a dashed box edge to edge: its right side drawn from the right edge in
+  const dash = `style="stroke:${C.dim}" stroke-opacity="0.35" stroke-dasharray="4 5"`
+  const s = `<line x1="1" x2="100%" y1="1" y2="1" ${dash}/><line x1="1" x2="100%" y1="${H - 1}" y2="${H - 1}" ${dash}/>`
+    + `<line x1="1" x2="1" y1="1" y2="${H - 1}" ${dash}/>` + at(1, `<line x1="-1" x2="-1" y1="1" y2="${H - 1}" ${dash}/>`)
+    + text('50%', L.top, L.head, { role: 'caption', anchor: 'middle', fill: C.fg })
+    + L.lines.map((l, i) => text('50%', L.top + 10 + baseline(i, 'note'), l, { role: 'note', anchor: 'middle' })).join('')
+  return drawing(s, H, pal)
+}
 /** Text broken into lines that fit `width` in a role's style; paragraphs split on newlines. */
 function wrap(note: string, width: number, role: Role): string[] {
   const lines: string[] = []
@@ -659,10 +681,8 @@ const linesHeight = (n: number, role: Role) => Math.ceil(n * px(role) * 1.4 + px
 /** Text in a role's style, wrapped to `width`. `fill` where state sets the colour. */
 export function noteSvg(note: string, width: number, pal: Palettes = DEFAULT_PALETTES, role: Role = 'note', fill?: string): string {
   const lines = wrap(note, width, role), H = linesHeight(lines.length, role)
-  const s = lines.map((l, i) => text(0, baseline(i, role), l, { role, ...(fill ? { fill } : {}) })).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${H}" width="${width}" height="${H}">${paletteStyle(pal)}${s}</svg>`
+  return drawing(lines.map((l, i) => text(0, baseline(i, role), l, { role, ...(fill ? { fill } : {}) })).join(''), H, pal)
 }
-
 /** How tall `noteSvg` draws this text at `width`. */
 export const noteHeight = (note: string, width: number, role: Role = 'note') => linesHeight(wrap(note, width, role).length, role)
 
@@ -730,19 +750,16 @@ export const PACE_LABEL = '1hr pace'
  * pointer. Drawn interactive for that.
  */
 export function withInfo(head: { svg: string; height: number; info?: InfoSpot }, chart: string, tip: string, width: number, pal: Palettes = DEFAULT_PALETTES): string {
-  const parts = (svg: string) => {
-    const m = /^<svg [^>]*viewBox="0 0 ([\d.]+) ([\d.]+)" width="([\d.]+)" height="([\d.]+)">([\s\S]*)<\/svg>$/.exec(svg)!
-    return { vw: m[1], vh: m[2], dw: m[3], dh: Number(m[4]), content: m[5] }
-  }
-  const h = parts(head.svg), c = parts(chart), gap = 10
-  const nest = (p: ReturnType<typeof parts>, y: number) => `<svg x="0" y="${y}" width="${p.dw}" height="${p.dh}" viewBox="0 0 ${p.vw} ${p.vh}">${p.content}</svg>`
-  let H = h.dh + gap + c.dh, over = ''
+  const inner = (svg: string) => /^<svg [^>]*>([\s\S]*)<\/svg>$/.exec(svg)![1]!
+  const hH = drawingHeight(head.svg), cH = drawingHeight(chart), gap = 10
+  const nest = (svg: string, y: number, h: number) => `<svg x="0" y="${y}" width="100%" height="${h}" overflow="visible">${inner(svg)}</svg>`
+  let H = hH + gap + cH, over = ''
   if (head.info) {
     const { cx, cy, r } = head.info
     const boxW = Math.min(width, 440), pad = 12
     const lines = wrap(tip, boxW - pad * 2, 'note')
     const boxH = linesHeight(lines.length, 'note') + pad * 2 - px('note') * 0.3
-    // the box opens just under the circle, kept inside the drawing
+    // the box opens just under the circle, kept inside the card
     const bx = Math.max(0, Math.min(cx - boxW / 2, width - boxW)), by = cy + r + 8
     H = Math.max(H, Math.ceil(by + boxH + 2))
     const info = `<g class="info" tabindex="0" role="button" aria-label="How is the 1hr pace worked out?">`
@@ -755,9 +772,8 @@ export function withInfo(head: { svg: string; height: number; info?: InfoSpot },
       + `.tip{display:none}.info:hover~.tip,.info:focus~.tip{display:inline}</style>`
     over = css + info + box
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${H}" width="${width}" height="${H}">${paletteStyle(pal)}${nest(h, 0)}${nest(c, h.dh + gap)}${over}</svg>`
+  return drawing(nest(head.svg, 0, hH) + nest(chart, hH + gap, cH) + over, H, pal)
 }
-
 /** What the pace comes to: the tooltip's first line. */
 export function paceText(p: Pace): string {
   if (!p.ready) return `No pace yet. ${p.why}`
@@ -778,53 +794,29 @@ export function paceExplain(p: Pace): string {
 // ---- fitting the pane ----
 
 /**
- * A cell of the desktop's code font in CSS pixels: the pane reports its size
- * in these cells, the drawings are sized in pixels.
+ * A cell of the desktop's code font in CSS pixels, as measured in the Code
+ * tab: the pane reports its width in these cells, the drawings are in pixels.
  */
-export const CELL_PX = { w: 7.8, h: 19.5 }
-/**
- * Pixels a card takes besides its head and chart: frame and padding, the gaps
- * between its parts, the note, and for the week the window controls (a row
- * more for the custom window's stepper). The desktop draws spacing tighter
- * than a text row, so these are counted in pixels, not cells.
- */
-const CARD_PX = { week: 118, weekCustom: 160, five: 60 }
-/** Charts never shrink below this: under it the pane scrolls rather than the chart becoming unreadable. */
-const MIN_CHART_H = { week: 150, five: 120 }
-/** A few pixels kept spare, so a rounding slip doesn't bring back the scrollbar. */
-const SLACK_PX = 12
+export const CELL_PX = { w: 9.5, h: 11.6 }
 
 export type Fit = { width: number; headWidth: number; weekHeight: number; fiveHeight: number }
 
-/**
- * Sizes the drawings so both cards fit the pane without scrolling: the charts
- * are drawn at the card's own width (text never scales with the pane) and
- * share all the height left after everything else, the week's chart the
- * larger share. Below its least height a chart keeps it, and the pane scrolls.
- */
-export function fit(columns: number, rows: number | undefined, week: Model | null, five: Model | null, customRow: boolean, now = 0, weekExtraPx = 0): Fit {
-  // drawn a touch wider than the card is likely to be: with no width of its own a drawing shrinks to its slot,
-  // so it always meets the card's right edge, where the controls sit, and scales by a few percent at most
-  const width = Math.max(320, Math.ceil((columns - 2) * CELL_PX.w))
-  const headWidth = width
-  if (rows === undefined) return { width, headWidth, weekHeight: 400, fiveHeight: 300 }
-  let fixedPx = SLACK_PX + (week ? weekExtraPx : 0)
-  // a card showing its empty state has no note under it: the box says it all
-  if (week) fixedPx += (customRow ? CARD_PX.weekCustom : CARD_PX.week) + headerHeight(week) + (emptyChartText(week, now) ? 0 : noteHeight(averageNote(week), width))
-  if (five) fixedPx += CARD_PX.five + headerHeight(five) + (emptyChartText(five, now) ? 0 : noteHeight(averageNote(five), width))
-  // a chart still waiting for data takes its box's height; every pixel left goes to the charts drawn, the week's the larger share
-  const weekDrawn = !!week && !emptyChartText(week, now), fiveDrawn = !!five && !emptyChartText(five, now)
-  if (week && !weekDrawn) fixedPx += EMPTY_H
-  if (five && !fiveDrawn) fixedPx += EMPTY_H
-  const room = rows * CELL_PX.h - fixedPx
-  const share = weekDrawn && fiveDrawn ? 4 / 7 : 1
-  return {
-    width, headWidth,
-    weekHeight: weekDrawn ? Math.round(Math.max(MIN_CHART_H.week, room * share)) : EMPTY_H,
-    fiveHeight: fiveDrawn ? Math.round(Math.max(MIN_CHART_H.five, room * (weekDrawn ? 1 - share : 1))) : EMPTY_H,
-  }
-}
+/** Chart heights: a share of the card's width, within bounds. */
+const CHART_H = { week: { ratio: 0.55, min: 260, max: 440 }, five: { ratio: 0.42, min: 200, max: 340 } }
 
+/**
+ * Sizes the drawings for a pane `columns` wide: the card's inner width, for
+ * what wraps, and each chart's height, which follows that width.
+ */
+export function fit(columns: number): Fit {
+  // the card's inner width: the pane less the card's padding and edge. Drawings fill whatever width they get;
+  // this is for laying out what wraps (figures, notes) and for the charts' heights
+  const width = Math.max(240, Math.floor((columns - 6) * CELL_PX.w))
+  // the pane's reported rows don't follow its real height in the desktop app, so the charts' heights
+  // follow the card's width instead: a wider card, a taller chart, within bounds
+  const tall = (k: 'week' | 'five') => Math.round(Math.min(CHART_H[k].max, Math.max(CHART_H[k].min, width * CHART_H[k].ratio)))
+  return { width, headWidth: width, weekHeight: tall('week'), fiveHeight: tall('five') }
+}
 function timeChart(m: Model, now: number, width: number, height: number, palettes: Palettes): string {
   const isWeek = m.kind === 'week'
   const values = bars(m, now, bucketMinutes(m.winH * 60), isWeek ? 24 : 1)

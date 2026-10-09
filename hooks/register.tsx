@@ -4,7 +4,7 @@ import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 import type { RangeReading, RangeSettings, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, FIVE_WINDOW_MIN, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
-  emptyChartSvg, emptyChartText, fit, fx, headerDraw, paceExplain, paceText, recentPace, withInfo, fiveChart, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
+  drawingHeight, emptyChartSvg, emptyChartText, fit, fx, headerDraw, paceExplain, paceText, recentPace, withInfo, fiveChart, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
   isShort, leftText, runsOut, weekChart, windowHours,
 } from './range'
 import type { Average, Model } from './range'
@@ -305,6 +305,7 @@ export const register: Register = on => {
           <Box flexDirection="row" columnGap={1}>
             <Text dimColor>Left at 5h reset</Text>
             <Text bold dimColor={!!five.noData} color={five.noData ? undefined : five.over ? 'error' : 'success'}>{leftText(five)}</Text>
+            <Button key="reset-five" plain dimColor label={resetsIn(five, s.fine)} onPress={() => toggleFine($)} />
           </Box>
         )}
         <Button key="details" label="Details" onPress={() => void $.ui.open({ id: PANE, title: TITLE })} />
@@ -319,7 +320,7 @@ export const register: Register = on => {
     const { Box, Text, Button } = els
     const Svg = 'Svg' in els ? els.Svg : null
     // both cards fit the pane: charts drawn at its width, sharing the height that's left
-    const size = fit(e.props.bodyColumns, e.props.scroll?.bodyRows, week, five, s.mode === 'window', now)
+    const size = fit(e.props.bodyColumns)
     // the weekly head carries the 1hr pace, its info circle opening a tooltip over the chart: head and chart are one drawing
     const weekDrawing = (m: Model) => {
       const chart = emptyChartText(m, now) ? emptyChartSvg(m, now, size.width, pal) : weekChart(m, now, size.width, pal, size.weekHeight)
@@ -329,6 +330,9 @@ export const register: Register = on => {
     }
 
     // one dark card per limit, as on the car's display: head, chart, controls, then the notes
+    // every drawing in a frame as wide as the card, given its height: it fills the width, and its text keeps its size
+    const Draw = ({ svg, alt }: { svg: string; alt: string }) =>
+      Svg ? <Svg source={svg} height={drawingHeight(svg)} isInteractive alt={alt} /> : null
     // `chart` may hold the head too (the weekly card with its pace): then no separate head is drawn
     const block = (title: string, m: Model, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
       const headInChart = !!chart?.includes('class="info"')
@@ -344,10 +348,10 @@ export const register: Register = on => {
         backgroundColor="userMessageBackground"
       >
         {/* the countdown is drawn in the head, at its right, so its text takes the drawing's styles */}
-        <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
-          {Svg ? (headInChart ? null :
-            <Svg
-              source={headerSvg(m, title, size.headWidth, pal, resetsIn(m, s.fine))}
+        {!headInChart && <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
+          {Svg ? (
+            <Draw
+              svg={headerSvg(m, title, size.headWidth, pal, resetsIn(m, s.fine))}
               alt={`${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}
             />
           ) : (
@@ -360,18 +364,20 @@ export const register: Register = on => {
             </Box>
           )}
           {!Svg && <Button key={`reset-${m.kind}`} plain label={resetsIn(m, s.fine)} onPress={() => toggleFine($)} />}
+        </Box>}
+        {/* the chart and its controls are one unit: the controls stay right under the chart */}
+        <Box key={`graph-${m.kind}`} flexDirection="column" gap={1}>
+          {chart && Svg && (
+            <Draw
+              svg={chart}
+              alt={`${headInChart ? `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}. ${pace ? `1hr pace ${pace.ready ? `${fx(pace.rate * 24)}%/day` : 'no data'}. ${paceText(pace)} ${paceExplain(pace)} ` : ''}` : ''}${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Average ${rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}`}
+            />
+          )}
+          {controls}
         </Box>
-        {chart && Svg && (
-          <Svg
-            source={chart}
-            isInteractive={headInChart || undefined}
-            alt={`${headInChart ? `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}. ${pace ? `1hr pace ${pace.ready ? `${fx(pace.rate * 24)}%/day` : 'no data'}. ${paceText(pace)} ${paceExplain(pace)} ` : ''}` : ''}${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Average ${rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}`}
-          />
-        )}
-        {controls}
-        <Box flexDirection="column" marginTop={controls ? 2 : 0}>
+        <Box flexDirection="column" marginTop={controls ? 1 : 0}>
           {notes.map(note => (Svg
-            ? <Svg source={noteSvg(note, size.width, pal)} alt={note} />
+            ? <Draw svg={noteSvg(note, size.width, pal)} alt={note} />
             : <Text color="inactive">{note}</Text>))}
         </Box>
       </Box>

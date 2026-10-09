@@ -49,6 +49,6 @@ test('the theme setting resolves presets, auto and custom files', async () => {
 
 test("a chart's style defaults to the theme's appearance and switches with the app's", async () => {
   const css = paletteStyle(palettesFor({ base: 'light', overrides: {} }))
-  expect(css).toMatch(/^<style>svg\{--card:#f0f0f0;/)
+  expect(css).toMatch(/^<style>:root\{color-scheme:light dark;background:transparent\}svg\{--card:#f0f0f0;/)
   expect(css).toMatch(/@media \(prefers-color-scheme:dark\)\{svg\{--card:#373737;/)
 })
