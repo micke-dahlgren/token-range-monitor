@@ -4,8 +4,17 @@ export type RangeReading = [t: number, kind: 0 | 1, pct: number, resetsAt: numbe
 /** A stretch of time a session on this computer was open and taking readings: [from, to] in ms. */
 export type RangeWatch = [from: number, to: number]
 
-/** What the weekly average covers (a window of n units, or since the reset), and whether reset countdowns show the finer unit. */
-export type RangeSettings = { mode: 'window' | 'reset'; n: number; unit: 'h' | 'd' | 'w'; fine: boolean }
+/**
+ * One model response seen here, subagents' included: when, the model's id, the effort it was asked for
+ * ('' for none), its tokens weighted by that model's price ratios, and 1 when a subagent made it.
+ */
+export type RangeStep = [t: number, model: string, effort: string, units: number, sub: 0 | 1]
+
+/**
+ * What the weekly average covers (a window of n units, or since the reset), whether reset countdowns show
+ * the finer unit, and the model the others' costs compare to (a model id; absent, the default).
+ */
+export type RangeSettings = { mode: 'window' | 'reset'; n: number; unit: 'h' | 'd' | 'w'; fine: boolean; baseline?: string }
 
 /** The colours the card draws with, as hex. */
 export type Palette = {
@@ -18,6 +27,6 @@ export type Palettes = { dark: Palette; light: Palette; own: 'dark' | 'light' }
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-range-monitor': { readings: RangeReading[]; seen: RangeWatch[]; settings: RangeSettings; tick: number; palettes: Palettes }
+    'token-range-monitor': { readings: RangeReading[]; seen: RangeWatch[]; steps: RangeStep[]; settings: RangeSettings; tick: number; palettes: Palettes }
   }
 }

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { RangeReading, RangeSettings, RangeWatch } from '../types'
+import type { RangeReading, RangeSettings, RangeStep, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   drawingHeight, emptyChartSvg, emptyChartText, fit, fx, headerDraw, paceExplain, paceText, recentPace, withInfo, fiveChart, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
@@ -9,6 +9,7 @@ import {
 } from './range'
 import type { Average, Model } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
+import { mergeSteps, units } from './models'
 
 const PANE = 'token-range-monitor'
 const TITLE = 'Token Range Monitor'
@@ -17,6 +18,7 @@ const settings = atom({ plugin: 'token-range-monitor', key: 'settings' } as cons
 const tick = atom({ plugin: 'token-range-monitor', key: 'tick' } as const, 0)
 const seen = atom({ plugin: 'token-range-monitor', key: 'seen' } as const, [])
 const palettes = atom({ plugin: 'token-range-monitor', key: 'palettes' } as const, DEFAULT_PALETTES)
+const steps = atom({ plugin: 'token-range-monitor', key: 'steps' } as const, [])
 
 /**
  * Usage limits are the account's, so the record is too: everything is stored
@@ -24,21 +26,26 @@ const palettes = atom({ plugin: 'token-range-monitor', key: 'palettes' } as cons
  * account starts from that account's own record. Within it each session
  * writes its readings under its own key (`r:`), and the spans it was watching
  * under the twin key (`w:`), so sessions never overwrite each other, and every
- * session reads them all.
+ * session reads them all. The responses it saw, each one's model and tokens,
+ * go under a third (`u:`).
  */
 let account = ''
 const OWN = 'r:'
 const SEEN = 'w:'
+const STEPS = 'u:'
 const ownPrefix = () => `${account}/${OWN}`
 const seenKeyOf = (key: string) => key.replace(`/${OWN}`, `/${SEEN}`)
+const stepsKeyOf = (key: string) => key.replace(`/${OWN}`, `/${STEPS}`)
 const newOwnKey = (now: number) => `${ownPrefix()}${now.toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
 /** A stored list's key: whose (none for a record kept before accounts), and which kind. */
-const parseKey = (key: string) => /^(?:(.+)\/)?([rw]):/.exec(key)
+const parseKey = (key: string) => /^(?:(.+)\/)?([rwu]):/.exec(key)
 
 let ownKey = ''
 let own: RangeReading[] = []
 let ownSeen: RangeWatch[] = []
 let othersSeen: RangeWatch[] = []
+let ownSteps: RangeStep[] = []
+let othersSteps: RangeStep[] = []
 
 /**
  * The signed-in account and organisation, from Claude Code's own config:
@@ -71,6 +78,7 @@ async function followAccount($: EngineInterface): Promise<boolean> {
   ownKey = newOwnKey(now)
   own = []
   ownSeen = []
+  ownSteps = []
   return true
 }
 
@@ -102,20 +110,22 @@ async function loadAll($: EngineInterface) {
   const now = await $.clock.now()
   const lists: RangeReading[][] = [own]
   const spans: RangeWatch[] = []
+  const stepLists: RangeStep[][] = []
   // the other copies' lists, read as they stand; this copy's own file is among them, and merging drops the repeats
   for (const [key, value] of await otherCopies($)) {
     const k = parseKey(key)
     if (!k || !Array.isArray(value) || (k[1] !== undefined && k[1] !== account)) continue
     if (k[2] === 'w') spans.push(...(value as RangeWatch[]))
+    else if (k[2] === 'u') stepLists.push(value as RangeStep[])
     else lists.push(value as RangeReading[])
   }
   for (const key of await $.store.keys()) {
     const k = parseKey(key)
-    if (!k || key === ownKey || key === seenKeyOf(ownKey)) continue
+    if (!k || key === ownKey || key === seenKeyOf(ownKey) || key === stepsKeyOf(ownKey)) continue
     const [, whose, kind] = k
-    const list = ((await $.store.get(key)) ?? []) as Array<RangeReading | RangeWatch>
+    const list = ((await $.store.get(key)) ?? []) as Array<RangeReading | RangeWatch | RangeStep>
     // drop lists once everything in them has aged out, whichever account's
-    const end = (x: RangeReading | RangeWatch) => (kind === 'w' ? (x as RangeWatch)[1] : x[0])
+    const end = (x: RangeReading | RangeWatch | RangeStep) => (kind === 'w' ? (x as RangeWatch)[1] : x[0])
     if (list.every(x => end(x) < now - KEEP)) { await $.store.delete(key); continue }
     if (whose === undefined) {
       // a record kept before accounts: it was this account's, so it moves under it
@@ -123,9 +133,12 @@ async function loadAll($: EngineInterface) {
       await $.store.delete(key)
     } else if (whose !== account) continue
     if (kind === 'w') spans.push(...(list as RangeWatch[]))
+    else if (kind === 'u') stepLists.push(list as RangeStep[])
     else lists.push(list as RangeReading[])
   }
   othersSeen = spans
+  othersSteps = mergeSteps(stepLists, now)
+  await update($, steps, () => mergeSteps([othersSteps, ownSteps], now))
   await update($, readings, () => merge(lists, now))
   await update($, seen, () => [...othersSeen, ...ownSeen])
 }
@@ -145,6 +158,24 @@ async function watch($: EngineInterface) {
     await $.store.set(seenKeyOf(ownKey), ownSeen)
   }
   await update($, seen, () => [...othersSeen, ...ownSeen])
+}
+
+/** Notes one response: its model, effort and weighted tokens. Saved at most every 30 seconds. */
+let stepsSavedAt = 0
+let stepsUnsaved = false
+async function record($: EngineInterface, step: RangeStep) {
+  const now = step[0]
+  if (!ownKey) ownKey = newOwnKey(now)
+  ownSteps = [...ownSteps.filter(s => s[0] >= now - KEEP), step]
+  stepsUnsaved = true
+  if (now - stepsSavedAt > 30_000) await saveSteps($, now)
+  await update($, steps, list => [...list, step])
+}
+async function saveSteps($: EngineInterface, now: number) {
+  if (!stepsUnsaved || !ownKey) return
+  stepsSavedAt = now
+  stepsUnsaved = false
+  await $.store.set(stepsKeyOf(ownKey), ownSteps)
 }
 
 async function capture($: EngineInterface, limits: readonly SessionRateLimit[]) {
@@ -250,6 +281,7 @@ export const register: Register = on => {
     await capture($, (await $.session.usage()).rateLimits)
     // once a minute: pick up other sessions' readings and move "now" along
     $.clock.every(60_000, async () => {
+      await saveSteps($, await $.clock.now())
       await followAccount($)
       await loadAll($)
       await loadTheme($)   // picks up a theme file edited in place
@@ -273,6 +305,15 @@ export const register: Register = on => {
     await loadTheme($)
     return result
   }).catch(($, e, next) => next(e))   // never stands in the way of the theme change itself
+
+  // every model response, main and subagents': its model, effort and tokens, for learning what each model costs
+  on('turn.step', async function* ($, e, next) {
+    const r = yield* next(e)
+    try {
+      if (r?.usage) await record($, [await $.clock.now(), r.usage.model || e.model, e.effort === undefined ? '' : String(e.effort), units(r.usage), e.agentId ? 1 : 0])
+    } catch { /* never in the way of the response */ }
+    return r
+  })
 
   on('tool.call', async ($, e, next) => {
     await watch($)

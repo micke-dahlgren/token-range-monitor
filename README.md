@@ -70,6 +70,12 @@ The weekly percentage moves in whole points, too coarse to read one hour from. T
 
 **How is this worked out?** under the line shows the numbers for your account. It's an estimate, and it settles as more usage is recorded.
 
+### Model costs
+
+Every response, subagents' included, reports its model, effort and tokens. Between two readings of the weekly limit that this computer watched throughout, the mod knows how far the limit rose and which models did the work. Over the last 14 days it solves for each model's weight. Within a model, output, input and cache tokens are combined at that model's published price ratios, so only the weight across models is learned.
+
+Each model is judged on its own. Its cost shows once the 90% range of its weight is within ±20%. Until then its row shows **Learning** with a meter, and its points this week wait under **Not split yet**. A model you rarely use, like Haiku in subagents, can take days.
+
 ## Good to know
 
 - **Pro and Max subscriptions only.** API-key usage has no subscription limits to show.
