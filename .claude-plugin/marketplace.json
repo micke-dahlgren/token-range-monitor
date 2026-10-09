@@ -1,5 +1,6 @@
 {
   "name": "token-range-monitor",
+  "description": "Token Range Monitor: see whether your current pace carries you to your next Claude limit reset",
   "owner": { "name": "micke-dahlgren" },
   "plugins": [{ "name": "token-range-monitor", "source": "./" }]
 }
