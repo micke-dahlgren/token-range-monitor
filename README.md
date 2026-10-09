@@ -37,7 +37,8 @@ claude plugin update token-range-monitor
 **The pane** has one card per limit, showing:
 
 - **Left at reset**, **Average** (your usage rate) and **Limit** (the highest rate you can keep up until the reset without running out). When you're over, it also says when you'd run out.
-- A chart of your usage over the averaging window, ending at *Now*. The dotted line is your average and the cyan line is the limit. If the dotted line is above the cyan one, you'll run out before the reset.
+- A chart of your usage over the averaging window, ending at *Now*. The dotted line is your average and the solid line is the limit. If the dotted line is above the solid one, you'll run out before the reset.
+- Bars are usage seen as it happened. Stretches the plugin didn't see (before it was installed, or while no session here was getting responses) show as one low block labelled with what's known, like "12% used while away, 9h".
 - For the weekly limit, a choice of what the average covers:
   - **Since reset** (the default): your usage since the weekly reset, from Anthropic's own figure. It needs no recorded history, so it works right after you install.
   - **Custom:** the last 1–24 hours or 1–7 days.
@@ -56,7 +57,7 @@ The mod shows **No data** rather than a misleading number when there isn't enoug
 - **A custom window needs that much recorded history.** A 2-day average needs 2 days of readings.
 - **Weekly estimates need at least 6 hours of data.** The weekly percentage moves in steps of about a point, so over a short stretch a single step reads as a huge rate.
 - **Since reset waits 6 hours after each weekly reset.**
-- **The 5-hour estimate averages the last 30 minutes.** Until 30 minutes are recorded, it uses Anthropic's figure since the 5-hour window opened, starting 15 minutes after it opens.
+- **The 5-hour estimate averages since the window opened,** from Anthropic's own figure, and its chart shows the whole window. It starts 15 minutes after the window opens.
 
 ### Recent pace
 

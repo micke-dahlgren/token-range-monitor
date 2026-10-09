@@ -116,7 +116,7 @@ export type Increment = {
   start: number
   end: number
   amount: number
-  /** Time inside the gap this computer didn't watch and nothing was placed in: drawn as "not watched". */
+  /** Set when the rise came over a gap this computer didn't watch: the gap's start and where the rise was placed. Drawn as the gap's block. */
   hole?: [number, number]
 }
 
@@ -195,12 +195,10 @@ export type Model = {
   winH: number
   /** When recording of this limit began (ms): before it the chart has no bars. */
   recordedFrom: number
-  /** Stretches this computer wasn't watching, where nothing was placed: drawn as "not watched". */
-  holes: Array<[number, number]>
   /**
    * Usage since the reset from before recording began, when the average runs
    * from the reset and the record begins inside this window: % used by the
-   * first reading, and when that was (ms). Drawn spread evenly up to then.
+   * first reading, and when that was (ms). Drawn as one block up to then.
    */
   before: { pct: number; until: number } | null
   /** Why there is no estimate, when there isn't enough behind the average; then the rate and what follows from it mean nothing. */
@@ -243,7 +241,7 @@ export function project(readings: readonly RangeReading[], kind: Kind, now: numb
   const before = avg.type === 'reset' && sameWindowAs(first, resetsAt) && first[0] > from ? { pct: first[2], until: first[0] } : null
   return {
     kind, pct, resetsAt, left, rate, limit: remaining / left, arrive: 100 - proj, over: proj > 100,
-    runsOutIn, early: Math.max(0, left - runsOutIn), average: avg, from, winH, recordedFrom, holes: incs.flatMap(i => (i.hole ? [i.hole] : [])), before, noData, increments: incs,
+    runsOutIn, early: Math.max(0, left - runsOutIn), average: avg, from, winH, recordedFrom, before, noData, increments: incs,
   }
 }
 
@@ -257,9 +255,11 @@ export const bucketMinutes = (winMin: number) =>
  */
 export function bars(m: Model, now: number, bucketMin: number, perHours: number): number[] {
   const n = Math.max(1, Math.round(m.winH * 60 / bucketMin)), width = (now - m.from) / n, out: number[] = []
+  // usage seen as it happened; what came in over a gap is drawn as that gap's block instead
+  const seen = m.increments.filter(i => !i.hole)
   for (let i = 0; i < n; i++) {
     const s = m.from + i * width
-    out.push(usedBetween(m.increments, s, s + width) / (width / HOUR) * perHours)
+    out.push(usedBetween(seen, s, s + width) / (width / HOUR) * perHours)
   }
   return out
 }
@@ -490,12 +490,15 @@ export type ChartSpec = {
   limit: number
   xTicks: Array<{ f: number; label: string }>
   marks: Array<{ f: number; label: string }>
-  /** The share of the chart, from the left, before recording began: hatched, no bars. */
+  /** The share of the chart, from the left, before recording began with nothing known of it: lightly tinted. */
   unrecorded: number
-  /** Usage before recording began, known only as a total: its rate, drawn faintly over the unrecorded share. */
-  estimate?: number
-  /** Stretches this computer wasn't watching, as shares of the chart: hatched, marked "not watched". */
-  holes: Array<[number, number]>
+  /**
+   * Stretches whose usage is known only as a total (before recording began,
+   * or while this computer wasn't watching): each one low block at the rate
+   * that total comes to, labelled with it. Shares of the chart, the rate per
+   * bar unit, and a long and a short label.
+   */
+  blocks: Array<{ f0: number; f1: number; rate: number; label: string; short: string }>
   unitLabel: string
   /** The theme's palettes; absent, the default dark theme's. */
   palettes?: Palettes
@@ -511,7 +514,7 @@ export function chartSvg(c: ChartSpec): string {
   const est = c.width, Hh = c.height
   const ax = px('axis')
   const padT = Math.ceil(ax * 1.5 + 12), padB = Math.ceil(ax * 1.5 + 12)
-  const peak = Math.max(...c.bars, c.avg ?? 0, c.estimate ?? 0, 0.0001) * 1.04
+  const peak = Math.max(...c.bars, c.avg ?? 0, ...c.blocks.map(b => b.rate), 0.0001) * 1.04
   const top = peak >= 10 ? Math.ceil(peak / 2) * 2 : peak
   const Y = (v: number) => Hh - padB - Math.min(v, top) / top * (Hh - padT - padB)
   const base = Y(0)
@@ -521,7 +524,6 @@ export function chartSvg(c: ChartSpec): string {
   let s = `<defs>
     <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${C.barTop}"/><stop offset="1" style="stop-color:${C.barBottom}"/></linearGradient>
     <linearGradient id="plot" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:${C.dim}" stop-opacity="0"/><stop offset="1" style="stop-color:${C.dim}" stop-opacity="0.07"/></linearGradient>
-    <pattern id="nr" width="16" height="16" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="16" style="stroke:${C.dim}" stroke-opacity="0.16" stroke-width="2.5"/></pattern>
   </defs>`
   s += text(2, padT - ax * 0.6, c.unitLabel)
   s += `<rect x="0" y="${padT}" width="100%" height="${base - padT}" rx="6" fill="url(#plot)"/>`
@@ -533,22 +535,28 @@ export function chartSvg(c: ChartSpec): string {
     const isNow = tk.f >= 1
     s += text(pct(tk.f), Hh - ax * 0.6, tk.label, { anchor: isNow ? 'end' : tk.f <= 0 ? 'start' : 'middle', ...(isNow ? { fill: C.fg, weight: 600 } : {}) })
   }
-  if (c.unrecorded > 0 && c.estimate === undefined) {
-    s += `<rect x="0" y="${padT + 1}" width="${pct(c.unrecorded)}" height="${base - padT - 2}" fill="url(#nr)"/>`
-    if (c.unrecorded * est > 90) s += text(pct(c.unrecorded / 2), base - ax * 0.6, 'not recorded', { anchor: 'middle' })
+  if (c.unrecorded > 0) {
+    s += `<rect x="0" y="${padT}" width="${pct(c.unrecorded)}" height="${base - padT}" style="fill:${C.dim}" fill-opacity="0.06"/>`
+    if (c.unrecorded * est > textWidth('not recorded', 'axis') + 16) s += text(pct(c.unrecorded / 2), base - ax * 0.6, 'not recorded', { anchor: 'middle' })
   }
-  for (const [f0, f1] of c.holes) {
-    const a = Math.max(f0, c.unrecorded)
-    if ((f1 - a) * est < 1) continue
-    s += `<rect x="${pct(a)}" y="${padT + 1}" width="${pct(f1 - a)}" height="${base - padT - 2}" fill="url(#nr)"/>`
-    if ((f1 - a) * est > 90) s += text(pct((a + f1) / 2), base - ax * 0.6, 'not watched', { anchor: 'middle' })
-  }
-  let late = ''   // labels drawn last, over the bars
-  // the faint bars: Anthropic's total for the time before this computer kept a record, spread evenly
-  const NOTE = 'Estimated: used before tracking started'
-  if (c.estimate !== undefined && c.unrecorded * est > textWidth(NOTE, 'axis') + 30) {
-    const w = textWidth(NOTE, 'axis') + 14, h = ax + 6
-    late += veil(6, base - 6 - h, w, h) + text(13, base - 6 - h / 2 + ax * 0.35, NOTE)
+  let late = ''   // labels drawn last, over the bars and lines
+  // each stretch known only as a total: one low block at the rate it comes to, its line on top, and what's known as its label
+  for (const b of c.blocks) {
+    const y = Y(b.rate), room = (b.f1 - b.f0) * est
+    s += `<rect x="${pct(b.f0)}" y="${y.toFixed(1)}" width="${pct(b.f1 - b.f0)}" height="${(base - y).toFixed(1)}" style="fill:${C.barBottom}" fill-opacity="0.22"/>`
+    s += `<line x1="${pct(b.f0)}" x2="${pct(b.f1)}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" style="stroke:${C.barBottom}" stroke-width="1.5"/>`
+    // above the line, or just inside it when the line is near the top
+    const ly = y - 6 - ax < padT ? y + ax + 4 : y - 6
+    const fits = (l: string) => textWidth(l, 'axis') + 8 <= room
+    const label = fits(b.label) ? b.label : fits(b.short) ? b.short : null
+    // on a backing, so a line crossing it doesn't run through the words
+    const tag = (x: number, l: string, anchor: 'middle' | 'start') => {
+      const w = textWidth(l, 'axis') + 10, bx = anchor === 'middle' ? x - w / 2 : x - 5
+      return `<rect x="${bx.toFixed(1)}" y="${(ly - ax).toFixed(1)}" width="${w.toFixed(1)}" height="${(ax + 5).toFixed(1)}" rx="4" style="fill:${C.veil}" fill-opacity="0.6"/>` + text(x, ly, l, { anchor, fill: C.fg })
+    }
+    if (label) late += at((b.f0 + b.f1) / 2, tag(0, label, 'middle'))
+    // too narrow to hold even the short one: it starts at the block and runs right, where there's room
+    else if (textWidth(b.short, 'axis') + 8 <= (1 - b.f0) * est) late += at(b.f0, tag(9, b.short, 'start'))
   }
   for (const mk of c.marks) {
     s += `<line x1="${pct(mk.f)}" x2="${pct(mk.f)}" y1="${padT}" y2="${base}" style="stroke:${C.dim}" stroke-dasharray="3 3"/>`
@@ -563,17 +571,15 @@ export function chartSvg(c: ChartSpec): string {
     late += veil(4, y - ax - 1, textWidth(label, 'axis') + 8, ax + 6, 4) + text(8, y, label)
   }
   const n = Math.max(1, c.bars.length)
-  const firstRecorded = c.unrecorded * c.bars.length
-  const bar = (i: number, v: number, faint: boolean) => {
+  // a recorded slice with no usage shows a dashed baseline; one inside a block or before recording doesn't
+  const covered = (f: number) => f < c.unrecorded || c.blocks.some(b => f >= b.f0 && f <= b.f1)
+  const bar = (i: number, v: number) => {
     const y = Y(v)
-    return `<rect x="${pct((i + 0.25) / n)}" y="${y.toFixed(1)}" width="${pct(0.5 / n)}" height="${Math.max(0, base - y).toFixed(1)}" rx="1.5" fill="url(#bar)"${faint ? ' fill-opacity="0.35"' : ''}/>`
+    return `<rect x="${pct((i + 0.25) / n)}" y="${y.toFixed(1)}" width="${pct(0.5 / n)}" height="${Math.max(0, base - y).toFixed(1)}" rx="1.5" fill="url(#bar)"/>`
   }
   c.bars.forEach((v, i) => {
-    // before recording, the usage Anthropic's figure accounts for, spread evenly: faint
-    const est2 = c.estimate !== undefined ? c.estimate * Math.min(1, Math.max(0, firstRecorded - i)) : 0
-    if (est2 > 0) s += bar(i, est2 + v, true)
-    if (v > 0) s += bar(i, v, false)
-    else if (i + 1 > firstRecorded && est2 === 0) {
+    if (v > 0) s += bar(i, v)
+    else if (!covered((i + 0.5) / n)) {
       s += `<line x1="${pct(i / n)}" x2="${pct((i + 1) / n)}" y1="${base - 1}" y2="${base - 1}" style="stroke:${C.barBottom}" stroke-width="1.5" stroke-dasharray="5 4"/>`
     }
   })
@@ -813,6 +819,32 @@ export function fit(columns: number): Fit {
   const tall = (k: 'week' | 'five') => Math.round(Math.min(CHART_H[k].max, Math.max(CHART_H[k].min, width * CHART_H[k].ratio)))
   return { width, weekHeight: tall('week'), fiveHeight: tall('five') }
 }
+const pctText = (v: number) => (v > 0 && v < 1 ? '<1%' : `${Math.round(v)}%`)
+
+/**
+ * The chart's stretches known only as a total: before recording began (the
+ * first reading's figure, since the reset), and each gap this computer wasn't
+ * watching. A weekly gap's rise could have come anywhere in it, so its block
+ * spans the gap; a 5-hour one belongs to the window it was seen in, so its
+ * block starts no earlier than the window opened.
+ */
+function knownBlocks(m: Model, now: number, perHours: number): ChartSpec['blocks'] {
+  const span = now - m.from, out: ChartSpec['blocks'] = []
+  const add = (a: number, b: number, amount: number, what: (p: string, h: string) => [string, string]) => {
+    const v0 = Math.max(a, m.from), v1 = Math.min(b, now)
+    if (v1 <= v0 || amount <= 0) return
+    const shown = amount * (v1 - v0) / (b - a), hours = (v1 - v0) / HOUR
+    const [label, short] = what(pctText(shown), dur(hours))
+    out.push({ f0: (v0 - m.from) / span, f1: (v1 - m.from) / span, rate: shown / hours * perHours, label, short })
+  }
+  if (m.before) add(m.from, m.before.until, m.before.pct, p => [`${p} before tracking`, p])
+  for (const inc of m.increments) {
+    if (!inc.hole) continue
+    add(m.kind === 'week' ? inc.hole[0] : inc.start, inc.end, inc.amount, (p, h) => [`${p} used while away, ${h}`, `${p} · ${h}`])
+  }
+  return out
+}
+
 function timeChart(m: Model, now: number, width: number, height: number, palettes: Palettes): string {
   const isWeek = m.kind === 'week'
   const values = bars(m, now, bucketMinutes(m.winH * 60), isWeek ? 24 : 1)
@@ -823,7 +855,6 @@ function timeChart(m: Model, now: number, width: number, height: number, palette
     : m.winH >= 2 ? `−${Math.round(h * 10) % 10 && h < 5 ? fx(h) : Math.round(h)}h`
     : `−${Math.round(h * 60)}m`
   const perHours = isWeek ? 24 : 1
-  const until = m.before ? Math.min(1, (m.before.until - m.from) / (now - m.from)) : 0
   const marks: ChartSpec['marks'] = []
   for (let k = 0; isWeek && k < 4; k++) {
     const at = m.resetsAt - (k + 1) * SPAN.week
@@ -833,12 +864,8 @@ function timeChart(m: Model, now: number, width: number, height: number, palette
     width, height, bars: values, avg: m.noData ? null : m.rate * (isWeek ? 24 : 1), limit: m.limit * (isWeek ? 24 : 1),
     xTicks: [0, 0.25, 0.5, 0.75].map(f => ({ f, label: tick(m.winH * (1 - f)) })).concat({ f: 1, label: 'Now' }),
     marks,
-    unrecorded: m.before ? until : Math.min(1, Math.max(0, (m.recordedFrom - m.from) / (now - m.from))),
-    ...(m.before && until > 0 ? { estimate: m.before.pct / ((m.before.until - m.from) / HOUR) * perHours } : {}),
-    holes: m.holes
-      .map(([a, b]): [number, number] => [(a - m.from) / (now - m.from), (b - m.from) / (now - m.from)])
-      .filter(([a, b]) => b > 0 && a < 1)
-      .map(([a, b]): [number, number] => [Math.max(0, a), Math.min(1, b)]),
+    unrecorded: m.before ? 0 : Math.min(1, Math.max(0, (m.recordedFrom - m.from) / (now - m.from))),
+    blocks: knownBlocks(m, now, perHours),
     palettes,
     unitLabel: `% per ${isWeek ? 'day' : 'hour'} · bar = ${barMin >= 60 ? dur(barMin / 60) : `${Math.max(1, Math.round(barMin))}m`}`,
   })
