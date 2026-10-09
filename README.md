@@ -58,10 +58,22 @@ The mod shows **No data** rather than a misleading number when there isn't enoug
 - **Since reset waits 6 hours after each weekly reset.**
 - **The 5-hour estimate averages the last 30 minutes.** Until 30 minutes are recorded, it uses Anthropic's figure since the 5-hour window opened, starting 15 minutes after it opens.
 
+### Recent pace
+
+The weekly card also answers "if I keep going like the last hour, when do I run out?"
+
+The weekly percentage moves in whole points, too coarse to read one hour from. The 5-hour percentage moves several times faster, so the pace is read from it:
+
+1. From your recorded history, the mod learns how many 5-hour points go with one weekly point on your account. It waits for 3 weekly points before trusting that.
+2. Your last hour of 5-hour usage, divided by that ratio, is your weekly pace.
+
+**How is this worked out?** under the line shows the numbers for your account. It's an estimate, and it settles as more usage is recorded.
+
 ## Good to know
 
 - **Pro and Max subscriptions only.** API-key usage has no subscription limits to show.
-- **History starts when you install it.** Readings are recorded while a Claude Code session is open. Usage on claude.ai or another device shows up as a jump at the next reading.
+- **History starts when you install it.** Readings are recorded while a Claude Code session is open, and every session on this computer shares them. Usage on claude.ai or another device shows up as a jump at the next reading.
+- **It keeps one history per account.** Limits belong to the signed-in account and organization, so signing in to another account switches to that account's own history.
 - **Your data stays on your computer,** in the mod's own storage in your Claude Code configuration folder. Nothing is sent anywhere.
 - **Built on Claude Code's early-access mod API.** A Claude Code update may change that API and break the mod before it's updated.
 

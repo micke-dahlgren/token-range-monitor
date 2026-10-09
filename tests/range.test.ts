@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, averageNote, heartbeat, increments, isWatched, needsMore, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, paceExplain, paceText, recentPace, increments, isWatched, needsMore, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
 
@@ -63,14 +63,14 @@ test('usage from a gap this computer slept through goes into the current 5-hour 
 test('without enough behind the average there is no estimate', async () => {
   // recording began an hour ago, 3d 7h into the week
   const readings = week([[1, 50], [0, 52]])
-  expect(project(readings, 'week', T0, hours(72))!.noData).toBe('3d needs 3d 0h of recorded usage. 1h 00m recorded so far, about 2d 23h to go.')
+  expect(project(readings, 'week', T0, hours(72))!.noData).toBe('3d needs 3d of recorded usage. 1h recorded so far, about 2d 23h to go.')
   // under six hours a weekly average is no estimate
-  expect(project(readings, 'week', T0, hours(1))!.noData).toBe('Weekly estimates need at least 6h 00m of data. Set the window to 6h 00m or more.')
+  expect(project(readings, 'week', T0, hours(1))!.noData).toBe('Weekly estimates need at least 6h of data. Set the window to 6h or more.')
   expect(project(readings, 'week', T0, { type: 'reset' })!.noData).toBe(null)
   // two hours after a reset is too soon to project the week from
   const fresh: RangeReading[] = [[T0, 1, 4, T0 + 7 * DAY - 2 * HOUR]]
-  expect(project(fresh, 'week', T0, { type: 'reset' })!.noData).toBe('No estimate this soon after the reset. About 4h 00m to go.')
-  expect(needsMore(hours(24), 5.5)).toBe('1d needs 1d 0h of recorded usage. 5h 30m recorded so far, about 18h 30m to go.')
+  expect(project(fresh, 'week', T0, { type: 'reset' })!.noData).toBe('No estimate this soon after the reset. About 4h to go.')
+  expect(needsMore(hours(24), 5.5)).toBe('1d needs 1d of recorded usage. 5h 30m recorded so far, about 18h 30m to go.')
 })
 
 test("since the reset uses Anthropic's figure; a window uses only what was recorded", async () => {
@@ -91,7 +91,7 @@ test("a 5-hour window just installed into averages from Anthropic's figure since
   expect(m.noData).toBe(null)
   expect(m.winH).toBe(2)
   expect(m.rate).toBe(10)
-  expect(averageNote(m)).toMatch(/^Average since the 5-hour window opened 2h 00m ago, from Anthropic's figure/)
+  expect(averageNote(m)).toMatch(/^Average since the 5-hour window opened 2h ago, from Anthropic's figure/)
   // ten minutes after it opened there is no estimate yet
   expect(project([[T0, 0, 3, T0 + 4 * HOUR + 50 * MIN]], 'five', T0, { type: 'reset' })!.noData).toMatch(/after the 5-hour window opened/)
 })
@@ -133,4 +133,51 @@ test('a session idle for longer than 15 minutes counts as not watching', async (
   expect(seen.length).toBe(2)
   expect(isWatched(seen, T0 - 60 * MIN, T0 - 50 * MIN)).toBe(true)
   expect(isWatched(seen, T0 - 50 * MIN, T0)).toBe(false)
+})
+
+test('a chart waits for enough recorded usage, and says how long', async () => {
+  const m = project([[T0 - 2 * HOUR, 1, 10, weekReset], [T0, 1, 12, weekReset]], 'week', T0, { type: 'reset' })!
+  expect(chartWait(m, T0)).toBe(4)
+  expect(emptyChartText(m, T0)![0]).toBe('Chart in about 4h')
+  // a window the record doesn't cover yet, or one shorter than the least, says so in the chart's place
+  const eight = project([[T0 - 6 * HOUR, 1, 10, weekReset], [T0, 1, 12, weekReset]], 'week', T0, hours(8))!
+  expect(emptyChartText(eight, T0)).toEqual(['Needs 8h of recorded usage', 'About 2h to go. 6h recorded so far.'])
+  const one = project([[T0 - 9 * HOUR, 1, 10, weekReset], [T0, 1, 12, weekReset]], 'week', T0, hours(1))!
+  expect(emptyChartText(one, T0)![0]).toBe('Weekly averages need at least 6h')
+  expect(emptyChartText(project([[T0 - 9 * HOUR, 1, 10, weekReset], [T0, 1, 12, weekReset]], 'week', T0, hours(6))!, T0)).toBe(null)
+  expect(chartWait(m, T0 + 4 * HOUR)).toBe(0)
+})
+
+test("the recent pace reads the last hour off the 5-hour figure, at the account's own exchange rate", async () => {
+  const fiveReset = T0 + 3 * HOUR
+  const watched: Array<[number, number]> = [[T0 - 10 * HOUR, T0]]
+  // six hours at 6 five-hour points for each weekly point, then a busy last hour: 12 five-hour points
+  const readings: RangeReading[] = []
+  for (let h = 6; h >= 1; h--) {
+    readings.push([T0 - h * HOUR, 1, 40 + (6 - h), weekReset])
+    readings.push([T0 - h * HOUR, 0, (6 - h) * 6, fiveReset])
+  }
+  readings.push([T0, 1, 47, weekReset], [T0, 0, 42, fiveReset])
+  const week = project(readings, 'week', T0, { type: 'reset' }, watched)!
+  const p = recentPace(readings, week, T0, watched)
+  if (!p.ready) throw new Error(p.why)
+  expect(Math.round(p.ratio * 10) / 10).toBe(6)
+  expect(Math.round(p.recent * 10) / 10).toBe(12)
+  expect(Math.round(p.rate * 10) / 10).toBe(2)
+  // 53% left at 2%/h: 26.5h, well before the reset 3d 17h away
+  expect(paceText(p)).toBe('At this pace, the weekly limit runs out 2d 15h early.')
+  // the head shows it as a fourth figure, its caption ending in the info circle
+  const head = headerDraw(week, 'This week', 700, undefined, '', p)
+  expect(head.svg).toContain('>1hr pace<')
+  expect(head.svg).toContain('>48.0%/day<')
+  expect(head.info).toBeDefined()
+  expect(paceExplain(p)).toBe('In the last hour you used 12.0% of your 5-hour limit. That\'s about 2.00% of your weekly limit, or 48.0% a day.\nThese numbers are estimates that get steadier over time.')
+})
+
+test('the recent pace waits for enough to relate the two limits, and says what for', async () => {
+  const readings: RangeReading[] = [[T0 - 2 * HOUR, 1, 40, weekReset], [T0, 1, 41, weekReset], [T0 - 2 * HOUR, 0, 1, T0 + HOUR], [T0, 0, 9, T0 + HOUR]]
+  const week = project(readings, 'week', T0, { type: 'reset' })!
+  const p = recentPace(readings, week, T0)
+  expect(p.ready).toBe(false)
+  expect(paceText(p)).toBe('No pace yet. It needs your weekly usage to go up 3% while recording. Up 1% so far.')
 })

@@ -1,6 +1,6 @@
 {
   "name": "token-range-monitor",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Projects what will be left of your weekly and 5-hour Claude limits at reset, from your recent usage rate",
   "author": { "name": "micke-dahlgren", "url": "https://github.com/micke-dahlgren" },
   "homepage": "https://github.com/micke-dahlgren/token-range-monitor",

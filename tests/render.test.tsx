@@ -47,7 +47,9 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   expect(await pane.find({ type: 'Svg' })).toBeDefined()
   expect(String((await pane.find({ type: 'Svg' }))?.props.alt)).toMatch(/Runs out in /)
   // the selector is native widgets: press the buttons, type into the field
-  const note = async () => (await pane.find({ type: 'Text', text: /^Average (over the last|over everything|since)/ }))?.text
+  // the note is drawn, so it reads from the drawing's alt text
+  const note = async () => (await pane.findAll({ type: 'Svg' }))
+    .map(x => String(x.props.alt)).find(alt => /^Average (over the last|since)/.test(alt) && !/, limit /.test(alt))
   const press = (key: string) => pane.press({ key })
 
   // a fresh install averages since the reset, with no window row
@@ -70,10 +72,33 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   expect(await note()).toBe('Average over the last 7h.')
   await press('win-dec')
   expect(await note()).toBe('Average over the last 6h.')
+  // 6 hours is the least on offer: the stepper stops there
+  await press('win-dec')
+  expect(await note()).toBe('Average over the last 6h.')
 
   // the count is shown between the stepper buttons
   expect(await pane.find({ type: 'Text', text: /^ 6 $/ })).toBeDefined()
   await press('unit-d')
   expect(await note()).toBe('Average over the last 6d.')
   await pane.unmount()
+
+  // the charts take the pane's width and share its height, so a shorter pane draws shorter charts
+  const charts = async (bodyColumns: number, bodyRows: number) => {
+    const p = await $.ui.mount({
+      plugin: 'token-range-monitor', surface: 'desktop', component: 'Pane', requestId: 'token-range-monitor',
+      props: { title: 'Token Range Monitor', isFocused: false, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows, contentRows: bodyRows } } as never,
+    })
+    // the charts alone, by their plot
+    const svgs = (await p.findAll({ type: 'Svg' })).filter(x => String(x.props.source).includes('id="plot"'))
+    await p.unmount()
+    return svgs.map(x => [Number(/ width="(\d+)"/.exec(String(x.props.source))?.[1]), /height="(\d+)"/.exec(String(x.props.source))?.[1]])
+  }
+  const tall = await charts(100, 90), short = await charts(100, 60), wide = await charts(200, 60)
+  expect(tall[0]![0]).toBe(765)
+  // the charts take all the height left: a taller pane, taller charts
+  expect(Number(tall[0]![1])).toBeGreaterThan(Number(short[0]![1]) + 300)
+  expect(wide[0]![0]).toBe(1545)
+  // wider, the chart stays as tall (a little taller once the countdown no longer wraps): it doesn't scale with the width
+  expect(Number(wide[0]![1])).toBeGreaterThanOrEqual(Number(short[0]![1]))
+  expect(Number(wide[0]![1])).toBeLessThan(Number(short[0]![1]) + 60)
 })
