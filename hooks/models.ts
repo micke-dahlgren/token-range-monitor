@@ -1,5 +1,5 @@
 import type { Palettes, RangeReading, RangeStep } from '../types'
-import { C, DAY, FONT, HOUR, KEEP, MONO, at, drawing, esc, isWatched, ofKind, pct, usedBetween } from './range'
+import { C, DAY, FONT, HOUR, KEEP, MONO, at, drawing, esc, increments, isWatched, ofKind, pct, usedBetween } from './range'
 import type { InfoSpot, Model, Watch } from './range'
 import { DEFAULT_PALETTES } from './theme'
 
@@ -7,11 +7,15 @@ import { DEFAULT_PALETTES } from './theme'
  * What each model costs, learned from this account's own history.
  *
  * Every response reports its model and tokens. Between two readings of the
- * weekly limit the plugin knows how far the limit rose and which models did
+ * 5-hour limit the plugin knows how far the limit rose and which models did
  * the work then, so over many such stretches it can solve for each model's
- * weight: rise ≈ Σ w·T. Within a model, its token kinds are combined at that
- * model's published price ratios (UNITS), so only the weight across models is
- * learned. A model's cost shows once its weight is known within ±SHOW_WITHIN.
+ * weight: rise ≈ Σ w·T. The 5-hour figure moves several times faster than the
+ * weekly one, so it gives several times the stretches; how models compare
+ * comes out the same from either limit, and the week's points are the 5-hour
+ * ones exchanged at the account's own rate (as the 1hr pace does). Within a
+ * model, its token kinds are combined at that model's published price ratios
+ * (UNITS), so only the weight across models is learned. A model's cost shows
+ * once its weight is known within ±SHOW_WITHIN.
  */
 
 /** A response's tokens, weighted as a model's price list weighs them: input 1, output 5, cache writes 1.25, cache reads 0.1. */
@@ -56,7 +60,7 @@ export type ModelCost = {
   id: string
   name: string
   family: Family
-  /** Weekly points per million weighted tokens; 0 until anything is known. */
+  /** 5-hour points per million weighted tokens; 0 until anything is known. */
   w: number
   /** The 90% range as a share of `w`: Infinity while nothing is known. */
   rel: number
@@ -72,6 +76,8 @@ export type Learned = {
   models: ModelCost[]
   /** When the first stretch learned from began (ms), or null with none yet. */
   since: number | null
+  /** 5-hour points per weekly point over the same span, or null until the weekly figure has moved enough to tell. */
+  perWeek: number | null
 }
 
 /** Solves the normal equations A·x = b (A symmetric, small) and gives A's inverse too; null when A is singular. */
@@ -103,22 +109,23 @@ export function learn(readings: readonly RangeReading[], steps: readonly RangeSt
   const from = now - LEARN_SPAN
   const recent = steps.filter(s => s[0] >= from && s[0] <= now)
   const ids = [...new Set(recent.map(s => s[1]))].sort(byRank)
-  const weeks = ofKind(readings, 'week').filter(r => r[0] >= from)
+  const fives = ofKind(readings, 'five').filter(r => r[0] >= from)
   const sorted = [...recent].sort((a, b) => a[0] - b[0])
 
   // the stretches: how far the limit rose, and each model's tokens (in millions) meanwhile
-  const rows: Array<{ y: number; x: number[] }> = []
+  const rows: Array<{ y: number; x: number[]; n: number }> = []
   let since: number | null = null
-  for (let i = 1; i < weeks.length; i++) {
-    const a = weeks[i - 1]!, b = weeks[i]!
+  for (let i = 1; i < fives.length; i++) {
+    const a = fives[i - 1]!, b = fives[i]!
     // a reset in between, or a gap nobody here watched: usage from elsewhere would count against these models
     if (Math.abs(a[3] - b[3]) > 5 * 60_000 || !isWatched(seen, a[0], b[0])) continue
     const y = b[2] - a[2]
     if (y < 0) continue
     const x = ids.map(() => 0)
-    for (const s of sorted) if (s[0] > a[0] && s[0] <= b[0]) x[ids.indexOf(s[1])]! += s[3] / 1e6
-    if (x.every(v => v === 0)) continue
-    rows.push({ y, x })
+    let n = 0
+    for (const s of sorted) if (s[0] > a[0] && s[0] <= b[0]) { x[ids.indexOf(s[1])]! += s[3] / 1e6; n++ }
+    if (n === 0) continue
+    rows.push({ y, x, n })
     since ??= a[0]
   }
 
@@ -139,15 +146,22 @@ export function learn(readings: readonly RangeReading[], steps: readonly RangeSt
   if (fit && rows.length > active.length) {
     active.forEach((i, j) => { w[i] = fit!.x[j]! })
     const rss = rows.reduce((s, r) => s + (r.y - r.x.reduce((t, v, i) => t + v * w[i]!, 0)) ** 2, 0)
-    // the readings are whole points: never trust a fit closer than that rounding allows
-    const s2 = Math.max(rss / (rows.length - active.length), 1 / 12)
+    // the limit is read at whole points, so each end of a stretch is off by part of the response that crossed
+    // the point, evenly anywhere in it: never trust a fit closer than that (two ends, each size²/12)
+    const perResponse = rows.reduce((s, r) => s + r.y, 0) / rows.reduce((s, r) => s + r.n, 0)
+    const s2 = Math.max(rss / (rows.length - active.length), perResponse ** 2 / 6)
     active.forEach((i, j) => {
       if (w[i]! > 0) rel[i] = Z90 * Math.sqrt(s2 * fit!.inv[j]![j]!) / w[i]!
     })
   }
 
+  // the exchange rate to weekly points, from what both limits rose by while watched
+  const weekPts = usedBetween(increments(readings, 'week', seen).filter(x => !x.hole), from, now)
+  const fivePts = usedBetween(increments(readings, 'five', seen).filter(x => !x.hole), from, now)
+
   return {
     since,
+    perWeek: weekPts >= 3 && fivePts > 0 ? fivePts / weekPts : null,
     models: ids.map((id, i) => {
       const mine = recent.filter(s => s[1] === id)
       const stretches = rows.filter(r => r.x[i]! > 0).length
@@ -186,9 +200,9 @@ export type Spend = {
 /** This week's points by model and effort, from the responses since the reset and the learned weights. */
 export function spend(week: Model, l: Learned, steps: readonly RangeStep[], now: number): Spend {
   const start = week.resetsAt - 7 * DAY
-  const models = l.models.filter(m => m.shown).map(cost => {
+  const models = (l.perWeek ? l.models.filter(m => m.shown) : []).map(cost => {
     const by = new Map<string, number>()
-    for (const s of steps) if (s[1] === cost.id && s[0] > start && s[0] <= now) by.set(s[2] || 'default', (by.get(s[2] || 'default') ?? 0) + s[3] / 1e6 * cost.w)
+    for (const s of steps) if (s[1] === cost.id && s[0] > start && s[0] <= now) by.set(s[2] || 'default', (by.get(s[2] || 'default') ?? 0) + s[3] / 1e6 * cost.w / l.perWeek!)
     const effort = [...by].sort((a, b) => b[1] - a[1])
     return { cost, pts: effort.reduce((s, e) => s + e[1], 0), effort }
   }).filter(m => m.pts > 0)

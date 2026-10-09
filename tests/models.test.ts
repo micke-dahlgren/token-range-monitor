@@ -8,25 +8,32 @@ const T0 = Date.UTC(2026, 9, 9, 15, 0)
 const reset = T0 + 2 * DAY
 
 /**
- * A week of work as the plugin would see it: a response every few minutes, the model
- * switching between sessions, weekly readings taken whenever the limit ticks up a point.
- * Opus costs 5 points per million weighted tokens, Sonnet 1; Haiku only now and then.
+ * Days of work as the plugin would see them: a response every few minutes, the model
+ * switching between sessions, readings taken whenever either limit ticks up a point.
+ * The weights are in weekly points per million weighted tokens; the 5-hour limit
+ * moves FIVE times as fast and opens a new window every 5 hours.
  */
+const FIVE = 4.5
 function history(weights: Record<string, number>, mix: (i: number) => string, every = 3 * MIN) {
   const steps: RangeStep[] = [], readings: RangeReading[] = []
-  let used = 0, shown = 0, t = T0 - 5 * DAY
+  let week = 0, five = 0, t = T0 - 5 * DAY
+  const windowEnd = (at: number) => T0 + HOUR - Math.floor((T0 + HOUR - at) / (5 * HOUR)) * 5 * HOUR
   // a pseudo-random but fixed sequence of response sizes
   let seed = 7
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647
-  readings.push([t, 1, 0, reset])
+  let win = windowEnd(t), lastW = 0, lastF = 0
+  readings.push([t, 1, 0, reset], [t, 0, 0, win])
   for (let i = 0; t < T0 - 2 * MIN; i++) {
     t += every
+    if (windowEnd(t) !== win) { win = windowEnd(t); five = 0; lastF = -1 }
     const model = mix(i)
     const u = 20_000 + rand() * 180_000
     const effort = rand() < 0.3 ? 'max' : 'high'
     steps.push([t, model, effort, u, rand() < 0.2 ? 1 : 0])
-    used += u / 1e6 * weights[model]!
-    if (Math.floor(used) > shown) { shown = Math.floor(used); readings.push([t, 1, shown, reset]) }
+    week += u / 1e6 * weights[model]!
+    five += u / 1e6 * weights[model]! * FIVE
+    if (Math.floor(week) > lastW) { lastW = Math.floor(week); readings.push([t, 1, lastW, reset]) }
+    if (Math.floor(five) > lastF) { lastF = Math.floor(five); readings.push([t, 0, lastF, win]) }
   }
   return { steps, readings, seen: [[T0 - 5 * DAY, T0]] as Array<[number, number]> }
 }
@@ -55,6 +62,8 @@ test('each model’s cost is learned from the ticks, and shows once it is sure e
   // the rare model is still learning, and says how far it has to go
   expect(haiku!.shown).toBe(false)
   expect(haiku!.more).toBeGreaterThan(0)
+  // learned off the 5-hour figure, exchanged to weekly points at the account's own rate
+  expect(Math.abs(l.perWeek! - FIVE)).toBeLessThan(0.5)
   const r = opus!.w / sonnet!.w
   expect(r).toBeGreaterThan(4.3)
   expect(r).toBeLessThan(5.7)

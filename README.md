@@ -77,9 +77,9 @@ The weekly percentage moves in whole points, too coarse to read one hour from. T
 
 ### Model costs
 
-Every response, subagents' included, reports its model, effort and tokens. Between two readings of the weekly limit that this computer watched throughout, the mod knows how far the limit rose and which models did the work. Over the last 14 days it solves for each model's weight. Within a model, output, input and cache tokens are combined at that model's published price ratios, so only the weight across models is learned.
+Every response, subagents' included, reports its model, effort and tokens. Between two readings of the 5-hour limit that this computer watched throughout, the mod knows how far the limit rose and which models did the work. Over the last 14 days it solves for each model's weight. It reads the 5-hour limit because it moves several times faster than the weekly one, which gives many more readings to learn from. Models compare the same on either limit, and this week's points use the same exchange rate as the 1hr pace. Within a model, output, input and cache tokens are combined at that model's published price ratios, so only the weight across models is learned.
 
-Each model is judged on its own. Its cost shows once the 90% range of its weight is within ±20%. Until then its row shows **Learning** with a meter, and its points this week wait under **Not split yet**. A model you rarely use, like Haiku in subagents, can take days.
+Each model is judged on its own. Its cost shows once the 90% range of its weight is within ±20%. Until then its row shows **Learning** with a meter, and its points this week wait under **Not split yet**. With steady use, Opus usually shows within hours. A cheap model you rarely use, like Haiku in subagents, takes longer.
 
 ## Good to know
 
