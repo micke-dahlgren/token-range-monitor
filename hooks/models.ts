@@ -1,6 +1,7 @@
-import type { RangeReading, RangeStep } from '../types'
-import { DAY, KEEP, isWatched, ofKind, usedBetween } from './range'
-import type { Model, Watch } from './range'
+import type { Palettes, RangeReading, RangeStep } from '../types'
+import { C, DAY, FONT, HOUR, KEEP, MONO, at, drawing, esc, isWatched, ofKind, pct, usedBetween } from './range'
+import type { InfoSpot, Model, Watch } from './range'
+import { DEFAULT_PALETTES } from './theme'
 
 /**
  * What each model costs, learned from this account's own history.
@@ -165,6 +166,12 @@ export function baselineOf(l: Learned, picked: string | undefined): ModelCost | 
   return shown.find(m => m.id === picked) ?? shown.find(m => m.family === 'sonnet') ?? [...shown].sort((a, b) => b.responses - a.responses)[0]!
 }
 
+/** The names the baseline buttons show: the family alone, unless two versions of it are shown. */
+export function shortNames(models: readonly ModelCost[]): Map<string, string> {
+  const count = (f: Family) => models.filter(m => m.family === f).length
+  return new Map(models.map(m => [m.id, m.family !== 'other' && count(m.family) === 1 ? m.name.replace(/ [\d.]+$/, '') : m.name]))
+}
+
 export type Spend = {
   /** % of the weekly limit used. */
   week: number
@@ -188,6 +195,208 @@ export function spend(week: Model, l: Learned, steps: readonly RangeStep[], now:
   const recorded = usedBetween(week.increments.filter(i => !i.hole), start, now)
   const split = models.reduce((s, m) => s + m.pts, 0)
   return { week: week.pct, models, unsplit: Math.max(0, recorded - split), away: Math.max(0, week.pct - recorded) }
+}
+
+// ---- words ----
+
+const comma = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+$)/, ',')
+const times = (x: number) => (x >= 1 ? x.toFixed(1) : x.toFixed(2)) + '×'
+const one = (n: number) => n.toFixed(1).replace(/\.0$/, '')
+
+/** A model's cost against the baseline, and its likely range. */
+export function ratio(m: ModelCost, b: ModelCost): { x: string; range: string } {
+  const x = m.w / b.w, err = Math.hypot(m.rel, b.rel)
+  return { x: times(x), range: `${times(Math.max(0, x * (1 - err)))}–${times(x * (1 + err))}` }
+}
+
+const responsesText = (m: ModelCost) =>
+  `${comma(m.responses)} ${m.responses === 1 ? 'response' : 'responses'}${m.sub === m.responses && m.sub > 0 ? ', all subagents' : m.sub > m.responses / 2 ? ', mostly subagents' : ''}`
+
+/** The tooltip on the card's ⓘ. */
+export const MODELS_INFO = 'Cost: how much of your limit each model uses token for token, compared with the model you pick. Learned from your history; shown once it’s within ±20%. This week: points of the weekly limit that went to each model, by effort.'
+
+/** The card in words, for a reader that can't see it and for surfaces without drawings. */
+export function modelsText(l: Learned, b: ModelCost | null, sp: Spend | null): string[] {
+  const rows = l.models.map(m => {
+    if (!m.shown) return `${m.name}: learning, ${responsesText(m)}${m.more ? `, about ${comma(m.more)} more to go` : ''}.`
+    if (!b) return `${m.name}: known, ${responsesText(m)}.`
+    if (m === b) return `${m.name}: 1×, the baseline.`
+    const r = ratio(m, b)
+    return `${m.name}: ${r.x} ${b.name}, likely ${r.range}.`
+  })
+  if (sp) {
+    rows.push(`This week ${Math.round(sp.week)}% used: ${[
+      ...sp.models.map(m => `${m.cost.name} ${one(m.pts)} (${m.effort.map(([e, v]) => `${e} ${one(v)}`).join(', ')})`),
+      ...(sp.unsplit ? [`not split yet ${one(sp.unsplit)}`] : []),
+      `not recorded ${one(sp.away)}`,
+    ].join(', ')}.`)
+  }
+  return rows
+}
+
+// ---- drawing ----
+
+/** Lower effort draws lighter within its model's colour. */
+const SHADE: Record<string, number> = { low: 0.35, medium: 0.55, high: 0.78, xhigh: 0.9, max: 1 }
+const shade = (e: string) => SHADE[e] ?? 0.7
+const colorOf = (f: Family) => (f === 'other' ? C.dim : C[f])
+
+type Txt = { size: number; weight?: number; fill?: string; anchor?: string; mono?: boolean }
+const t = (x: number | string, y: number, s: string, o: Txt) =>
+  `<text x="${typeof x === 'number' ? x.toFixed(1) : x}" y="${y.toFixed(1)}" text-anchor="${o.anchor ?? 'start'}" style="fill:${o.fill ?? C.fg}" font-family="${o.mono ? MONO : FONT}" font-size="${o.size}px" font-weight="${o.weight ?? 400}">${esc(s)}</text>`
+/** About how wide a text runs. */
+const tw = (s: string, size: number, _mono = false) => s.length * size * 0.6
+const dot = (x: number, y: number, fill: string, size = 10, opacity = 1) =>
+  `<rect x="${x}" y="${(y - size / 2).toFixed(1)}" width="${size}" height="${size}" rx="${size * 0.3}" style="fill:${fill}"${opacity < 1 ? ` fill-opacity="${opacity}"` : ''}/>`
+const rule = (y: number) => `<line x1="0" x2="100%" y1="${y}" y2="${y}" style="stroke:${C.dim}" stroke-opacity="0.25"/>`
+const LABEL = 11
+
+/** A span in words: "14 days", "9 hours", "40 minutes". */
+const spanText = (h: number) => {
+  const [n, unit] = h >= 48 ? [Math.round(h / 24), 'day'] : h >= 1 ? [Math.round(h), 'hour'] : [Math.max(1, Math.round(h * 60)), 'minute']
+  return `${n} ${unit}${n === 1 ? '' : 's'}`
+}
+
+/** The card's head: "Models" and how long the costs were learned from; its info circle is drawn by `withInfo`, which opens the tooltip over the rows. */
+export function modelsHead(l: Learned, now: number, pal: Palettes = DEFAULT_PALETTES): { svg: string; height: number; info: InfoSpot } {
+  const size = 1.2 * 16, y = size, r = 8
+  const learned = l.since === null ? 'learning' : `learned from ${spanText((now - l.since) / HOUR)}`
+  const height = Math.ceil(y + 8)
+  return {
+    svg: drawing(t(0, y, 'Models', { size, weight: 500 }) + t('100%', y, learned, { size: 12, fill: C.dim, anchor: 'end' }), height, pal),
+    height,
+    info: { cx: tw('Models', size) * 0.95 + 14, cy: y - size * 0.32, r },
+  }
+}
+
+/** The cost rows, `width` wide: each model's cost against the baseline, or a meter while it learns. */
+export function modelsCosts(l: Learned, b: ModelCost | null, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+  let s = '', y = 0
+  // ---- costs ----
+  l.models.forEach((m, i) => {
+    if (i > 0) s += rule(y)
+    const top = y + (i > 0 ? 11 : 4), name = top + 13, meta = name + 19
+    const learning = !m.shown
+    s += dot(0, name - 4.5, colorOf(m.family)) + t(18, name, m.name, { size: 15, weight: 500 })
+    const isBase = !!b && m === b
+    if (isBase) {
+      const x = 18 + tw(m.name, 15) + 10
+      s += `<rect x="${x.toFixed(1)}" y="${(name - 12).toFixed(1)}" width="${(tw('baseline', 11, true) + 12).toFixed(1)}" height="17" rx="4" style="fill:${C.dim}" fill-opacity="0.14"/>`
+        + t(x + 6, name, 'baseline', { size: 11, weight: 500, mono: true })
+    }
+    let fig: string, right: string
+    if (learning) { fig = ''; right = 'not sure enough yet' }
+    else if (!b) { fig = ''; right = 'compares once a second model shows' }
+    else if (isBase) { fig = '1×'; right = 'the others compare to this' }
+    else { const r = ratio(m, b); fig = r.x; right = `likely ${r.range}` }
+    if (learning) s += t('100%', name, 'Learning', { size: 12, mono: true, fill: C.over, anchor: 'end' })
+    else if (fig) s += t('100%', name, fig, { size: 15, weight: 500, mono: true, anchor: 'end' })
+    else s += t('100%', name, 'Known', { size: 12, mono: true, fill: C.dim, anchor: 'end' })
+    s += t(0, meta, responsesText(m), { size: 12.5, fill: C.dim }) + t('100%', meta, right, { size: 12.5, fill: C.dim, anchor: 'end' })
+    y = meta + 5
+    if (learning) {
+      // the meter runs from ±100% (nothing known) to ±20% (shown)
+      const p = isFinite(m.rel) ? Math.max(0.04, Math.min(1, (1 - Math.min(m.rel, 1)) / (1 - SHOW_WITHIN))) : 0.04
+      const note = `shows at ±20% · ${m.more ? `about ${comma(m.more)} more responses` : 'needs more responses'}`
+      const room = 1 - (tw(note, 11.5, true) + 12) / width
+      const my = y + 11
+      s += `<rect x="0" y="${my - 3}" width="${pct(Math.max(0.2, room))}" height="6" rx="3" style="fill:${C.dim}" fill-opacity="0.14"/>`
+        + `<rect x="0" y="${my - 3}" width="${pct(Math.max(0.2, room) * p)}" height="6" rx="3" style="fill:${C.over}"/>`
+        + t('100%', my + 4, note, { size: 11.5, mono: true, fill: C.dim, anchor: 'end' })
+      y = my + 9
+    }
+  })
+  if (!l.models.length) {
+    s += t(0, 16, 'No responses recorded yet. Costs are learned from the responses your sessions get.', { size: 12.5, fill: C.dim })
+    y = 24
+  }
+  return drawing(s, y + 4, pal)
+}
+
+/** This week's points: a bar split by model and effort, each model's efforts as chips, and what isn't split or wasn't recorded. */
+export function modelsSpend(sp: Spend, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+  let s = '', y = 14
+  const head = `This week · ${Math.round(sp.week)}% of limit used`, sub = 'points of the weekly limit, by model and effort'
+  s += t(0, y, head, { size: LABEL, weight: 500, mono: true, fill: C.dim })
+  if (head.length * LABEL * 0.6 + tw(sub, 12) + 16 <= width) s += t('100%', y, sub, { size: 12, fill: C.dim, anchor: 'end' })
+  else { y += 17; s += t(0, y, sub, { size: 12, fill: C.dim }) }
+  y += 10
+  const total = Math.max(sp.week, sp.models.reduce((a, m) => a + m.pts, 0) + sp.unsplit + sp.away, 0.0001)
+  const segs = [
+    ...sp.models.flatMap(m => m.effort.map(([e, v]) => ({ fill: colorOf(m.cost.family), o: shade(e), v }))),
+    ...(sp.unsplit ? [{ fill: C.over, o: 0.45, v: sp.unsplit }] : []),
+  ]
+  let f = 0, bar = `<rect x="0" y="0" width="100%" height="22" style="fill:${C.dim}" fill-opacity="0.12"/>`
+  for (const g of segs) {
+    bar += `<rect x="${pct(f)}" y="0" width="${pct(g.v / total)}" height="22" style="fill:${g.fill}" fill-opacity="${g.o}"/>`
+    if (f > 0) bar += `<line x1="${pct(f)}" x2="${pct(f)}" y1="0" y2="22" style="stroke:${C.card}"/>`
+    f += g.v / total
+  }
+  if (sp.away) bar += `<rect x="${pct(f)}" y="0" width="${pct(sp.away / total)}" height="22" fill="url(#away)"/>` + (f > 0 ? `<line x1="${pct(f)}" x2="${pct(f)}" y1="0" y2="22" style="stroke:${C.card}"/>` : '')
+  s += `<defs><pattern id="away" width="5" height="22" patternUnits="userSpaceOnUse"><rect width="2" height="22" style="fill:${C.dim}" fill-opacity="0.55"/></pattern>`
+    + `<clipPath id="stack"><rect x="0" y="0" width="100%" height="22" rx="5"/></clipPath></defs>`
+    + `<svg x="0" y="${y}" width="100%" height="22" overflow="hidden"><g clip-path="url(#stack)">${bar}</g></svg>`
+  y += 22 + 8
+
+  // each model: its points, then a chip per effort, largest first
+  for (const m of sp.models) {
+    s += rule(y)
+    const hy = y + 20
+    s += dot(0, hy - 4.5, colorOf(m.cost.family)) + t(17, hy, m.cost.name, { size: 13.5, weight: 500 }) + t('100%', hy, one(m.pts), { size: 13, weight: 500, mono: true, anchor: 'end' })
+    let cx = 17, cy = hy + 9
+    for (const [e, v] of m.effort) {
+      const a = one(v), share = `${Math.round(v / (m.pts || 1) * 100)}%`
+      const w = 8 + 8 + 6 + tw(e, 12.5) + 6 + tw(a, 12, true) + 6 + tw(share, 11.5, true) + 8
+      if (cx > 17 && cx + w > width) { cx = 17; cy += 28 }
+      let x = cx + 8
+      s += `<rect x="${cx.toFixed(1)}" y="${cy}" width="${w.toFixed(1)}" height="22" rx="5" style="fill:${C.dim}" fill-opacity="0.12"/>`
+      s += dot(x, cy + 11, colorOf(m.cost.family), 8, shade(e)); x += 14
+      s += t(x, cy + 15.5, e, { size: 12.5 }); x += tw(e, 12.5) + 6
+      s += t(x, cy + 15.5, a, { size: 12, weight: 500, mono: true }); x += tw(a, 12, true) + 6
+      s += t(x, cy + 15.5, share, { size: 11.5, mono: true, fill: C.dim })
+      cx += w + 6
+    }
+    y = cy + 22 + 7
+  }
+
+  // what isn't split by model: side by side when they fit, else one under the other
+  const legend = [
+    ...(sp.unsplit ? [{ label: 'Not split yet', v: sp.unsplit, sw: dot(0, 0, C.over, 10, 0.45) }] : []),
+    { label: 'Not recorded', v: sp.away, sw: `<rect x="0" y="-5" width="10" height="10" rx="3" fill="url(#away)" style="stroke:${C.dim}" stroke-opacity="0.55"/>` },
+  ]
+  const cols = legend.length > 1 && width >= 2 * 150 + 14 ? 2 : 1
+  if (sp.models.length) s += rule(y)
+  y += 6
+  legend.forEach((g, i) => {
+    const col = i % cols, row = Math.floor(i / cols), ly = y + 14 + row * 22
+    const x0 = col / cols, x1 = (col + 1) / cols
+    s += at(x0, `<g transform="translate(${col ? 7 : 0},${ly - 4.5})">${g.sw}</g>` + t(col ? 24 : 17, ly, g.label, { size: 13, fill: C.dim }))
+    s += at(x1, t(col < cols - 1 ? -7 : 0, ly, one(g.v), { size: 13, weight: 500, mono: true, fill: C.dim, anchor: 'end' }))
+  })
+  y += 14 + Math.ceil(legend.length / cols) * 22 - 14
+
+  if (!sp.models.length) {
+    const note = `No model’s cost is known yet, so this week can’t be split. The ${one(sp.unsplit)} points recorded here will split once a model’s figure shows.`
+    const lines = wrapAt(note, width - 26, 13)
+    const H = lines.length * 19 + 16
+    y += 14
+    const dash = `style="stroke:${C.dim}" stroke-opacity="0.45" stroke-dasharray="4 4" fill="none"`
+    s += `<rect x="0.5" y="${y + 0.5}" width="99.9%" height="${H}" rx="8" ${dash}/>`
+      + lines.map((ln, i) => t(12, y + 22 + i * 19, ln, { size: 13, fill: C.dim })).join('')
+    y += H + 2
+  }
+  return drawing(s, y + 6, pal)
+}
+
+/** Text broken into lines that fit `width` at `size`. */
+function wrapAt(s: string, width: number, size: number): string[] {
+  const lines: string[] = []
+  for (const word of s.split(' ')) {
+    const last = lines[lines.length - 1]
+    if (last !== undefined && tw(`${last} ${word}`, size) <= width) lines[lines.length - 1] = `${last} ${word}`
+    else lines.push(word)
+  }
+  return lines
 }
 
 /** Steps older than the readings are kept are dropped, and repeats merged. */

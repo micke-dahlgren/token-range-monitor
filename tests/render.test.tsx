@@ -45,6 +45,8 @@ test('the band and the pane draw on the desktop', async ($, on) => {
     props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 60, placement: 'dock' } as never,
   })
   expect(await pane.find({ type: 'Svg' })).toBeDefined()
+  // the models card follows the two limits' cards, still learning with no responses seen
+  expect((await pane.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('Models.'))).toBe(true)
   expect(String((await pane.find({ type: 'Svg' }))?.props.alt)).toMatch(/Runs out in /)
   // the selector is native widgets: press the buttons, type into the field
   // the note is drawn, so it reads from the drawing's alt text

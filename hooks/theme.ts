@@ -155,6 +155,11 @@ export function derivePalette(t: Tokens): Palette {
     over: on(k.warning, 3),
     under: on(k.success, 3),
     bad: on(k.error, 3),
+    // the models: Claude's own colour for Opus, then hues apart from it and from each other
+    fable: on(mix(k.error, k.suggestion, 0.5), 3),
+    opus: on(k.claude, 3),
+    sonnet: on(k.suggestion, 3),
+    haiku: on(mix(k.success, k.suggestion, 0.35), 3),
   }
 }
 

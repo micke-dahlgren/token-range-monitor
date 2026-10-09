@@ -329,9 +329,10 @@ export const rateText = (m: Model, perHour: number) =>
 
 /** The card's colours, as CSS variables a chart's <style> sets from the person's theme (see theme.ts). */
 export const C = Object.fromEntries(
-  (['card', 'veil', 'fg', 'dim', 'off', 'barTop', 'barBottom', 'limit', 'over', 'under', 'bad'] as const).map(k => [k, v(k)]),
+  (['card', 'veil', 'fg', 'dim', 'off', 'barTop', 'barBottom', 'limit', 'over', 'under', 'bad', 'fable', 'opus', 'sonnet', 'haiku'] as const).map(k => [k, v(k)]),
 ) as Record<PaletteKey, string>
-const FONT = 'system-ui, -apple-system, Segoe UI, sans-serif'
+export const FONT = 'system-ui, -apple-system, Segoe UI, sans-serif'
+export const MONO = 'ui-monospace, SF Mono, Menlo, monospace'
 
 /**
  * Every text style in the drawings, by role: size in rem (1rem = 16px), weight,
@@ -361,7 +362,7 @@ type Role = 'title' | 'warning' | 'caption' | 'figure' | 'axis' | 'line' | 'coun
 const px = (role: Role) => TEXT[role].rem * 16
 /** About how wide a text runs, for laying out around it. */
 const textWidth = (str: string, role: Role) => str.length * px(role) * (TEXT[role].weight >= 600 ? 0.6 : 0.55)
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+export const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 /**
  * The width a drawing tells the app it has. The app shows each drawing in a
  * frame as wide as its slot, up to this; inside, the drawing fills the frame
@@ -376,9 +377,9 @@ export function drawing(content: string, height: number, pal: Palettes = DEFAULT
 /** A drawing's height: what its frame is given. */
 export const drawingHeight = (svg: string) => Number(/^<svg [^>]* height="(\d+)">/.exec(svg)![1])
 /** A share of the width, as a length. */
-const pct = (f: number) => `${(f * 100).toFixed(3)}%`
+export const pct = (f: number) => `${(f * 100).toFixed(3)}%`
 /** Content placed with its origin at a share of the width (1: the right edge); it draws at negative x to sit left of it. */
-const at = (f: number, content: string) => `<svg x="${pct(f)}" y="0" width="1" height="1" overflow="visible">${content}</svg>`
+export const at = (f: number, content: string) => `<svg x="${pct(f)}" y="0" width="1" height="1" overflow="visible">${content}</svg>`
 
 /** A text in its role's style; `fill` and `weight` only where state sets them. */
 const text = (x: number | string, y: number, s: string, o: { role?: Role; fill?: string; anchor?: string; weight?: number } = {}) => {
@@ -751,7 +752,7 @@ export const PACE_LABEL = '1hr pace'
  * takes focus on a click and CSS shows the box while it has focus or the
  * pointer. Drawn interactive for that.
  */
-export function withInfo(head: { svg: string; height: number; info?: InfoSpot }, chart: string, tip: string, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+export function withInfo(head: { svg: string; height: number; info?: InfoSpot }, chart: string, tip: string, width: number, pal: Palettes = DEFAULT_PALETTES, label = 'How is the 1hr pace worked out?'): string {
   const inner = (svg: string) => /^<svg [^>]*>([\s\S]*)<\/svg>$/.exec(svg)![1]!
   const hH = drawingHeight(head.svg), cH = drawingHeight(chart), gap = 10
   const nest = (svg: string, y: number, h: number) => `<svg x="0" y="${y}" width="100%" height="${h}" overflow="visible">${inner(svg)}</svg>`
@@ -761,10 +762,10 @@ export function withInfo(head: { svg: string; height: number; info?: InfoSpot },
     const boxW = Math.min(width, 440), pad = 12
     const lines = wrap(tip, boxW - pad * 2, 'note')
     const boxH = linesHeight(lines.length, 'note') + pad * 2 - px('note') * 0.3
-    // the box opens just under the circle, kept inside the card
-    const bx = Math.max(0, Math.min(cx - boxW / 2, width - boxW)), by = cy + r + 8
+    // the box opens just under the circle and ends at it, so it stays inside the card whatever its real width
+    const bx = Math.max(0, cx + r + 4 - boxW), by = cy + r + 8
     H = Math.max(H, Math.ceil(by + boxH + 2))
-    const info = `<g class="info" tabindex="0" role="button" aria-label="How is the 1hr pace worked out?">`
+    const info = `<g class="info" tabindex="0" role="button" aria-label="${esc(label)}">`
       + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${(r + 4).toFixed(1)}" fill="transparent"/>`
       + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="transparent" style="stroke:${C.dim}" stroke-width="1.2"/>`
       + `<text x="${cx.toFixed(1)}" y="${(cy + r * 0.55).toFixed(1)}" text-anchor="middle" style="fill:${C.dim}" font-family="${FONT}" font-size="${(r * 1.5).toFixed(1)}" font-weight="600">i</text></g>`

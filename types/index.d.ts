@@ -20,6 +20,8 @@ export type RangeSettings = { mode: 'window' | 'reset'; n: number; unit: 'h' | '
 export type Palette = {
   card: string; veil: string; fg: string; dim: string; off: string
   barTop: string; barBottom: string; limit: string; over: string; under: string; bad: string
+  /** A colour per model family. */
+  fable: string; opus: string; sonnet: string; haiku: string
 }
 
 /** The card's palettes for a dark and a light appearance, derived from the theme, and which one the theme itself is. */

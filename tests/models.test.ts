@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading, RangeStep } from '../types'
 import { DAY, HOUR, MIN, project } from '../hooks/range'
-import { baselineOf, learn, modelName, spend, units } from '../hooks/models'
+import { baselineOf, learn, modelName, modelsCosts, modelsSpend, modelsText, ratio, shortNames, spend, units } from '../hooks/models'
 
 const T0 = Date.UTC(2026, 9, 9, 15, 0)
 const reset = T0 + 2 * DAY
@@ -62,6 +62,8 @@ test('each model’s cost is learned from the ticks, and shows once it is sure e
   // the baseline is Sonnet by default, any shown model when picked
   expect(baselineOf(l, undefined)).toBe(sonnet)
   expect(baselineOf(l, 'claude-opus-5-5')).toBe(opus)
+  expect(ratio(sonnet!, opus!).x).toMatch(/^0\.\d\d×$/)
+  expect(shortNames([opus!, sonnet!]).get('claude-opus-5-5')).toBe('Opus')
 
   // this week's points split by model and effort, adding up to what was recorded
   const week = project(readings, 'week', T0, { type: 'reset' }, seen)!
@@ -70,6 +72,11 @@ test('each model’s cost is learned from the ticks, and shows once it is sure e
   expect(sp.models[0]!.effort.map(e => e[0])).toEqual(['high', 'max'])
   const split = sp.models.reduce((s, m) => s + m.pts, 0)
   expect(Math.abs(split + sp.unsplit + sp.away - week.pct)).toBeLessThan(week.pct * 0.15)
+
+  const svg = modelsCosts(l, sonnet!, 600) + modelsSpend(sp, 600)
+  expect(svg).not.toMatch(/ [xy]=""/)
+  expect(svg).toContain('Opus 5.5')
+  expect(modelsText(l, sonnet!, sp).join(' ')).toMatch(/Opus 5\.5: [\d.]+× Sonnet 5\.5/)
 })
 
 test('one model alone is known but has nothing to compare with', async () => {

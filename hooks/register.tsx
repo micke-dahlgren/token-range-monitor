@@ -9,7 +9,7 @@ import {
 } from './range'
 import type { Average, Model } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
-import { mergeSteps, units } from './models'
+import { baselineOf, learn, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
 
 const PANE = 'token-range-monitor'
 const TITLE = 'Token Range Monitor'
@@ -246,6 +246,8 @@ async function models($: EngineInterface) {
     now, s, weekRecorded, pal, week,
     five: project(list, 'five', now, fiveAvg, watched),
     pace: week ? recentPace(list, week, now, watched) : null,
+    learned: learn(list, await read($, steps), watched, now),
+    steps: await read($, steps),
   }
 }
 
@@ -367,7 +369,7 @@ export const register: Register = on => {
 
   // B: the side pane
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { now, s, week, five, pal, pace, weekRecorded } = await models($)
+    const { now, s, week, five, pal, pace, weekRecorded, learned, steps: stepList } = await models($)
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const Svg = 'Svg' in els ? els.Svg : null
@@ -465,6 +467,40 @@ export const register: Register = on => {
       </Box>
     )
 
+    // the models card: each model's cost against the baseline, and this week's points by model and effort
+    const base = baselineOf(learned, s.baseline)
+    const sp = week ? spend(week, learned, stepList, now) : null
+    const shown = learned.models.filter(m => m.shown)
+    const names = shortNames(shown)
+    const modelsCard = (
+      <Box key="block-models" flexDirection="column" gap={1} marginBottom={1} padding={2} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
+        {Svg ? (
+          <>
+            {/* the head's info circle opens its tooltip over the rows: head and rows are one drawing */}
+            <Draw svg={withInfo(modelsHead(learned, now, pal), modelsCosts(learned, base, size.width, pal), MODELS_INFO, size.width, pal, 'What do these figures mean?')} alt={`Models. ${modelsText(learned, base, null).join(' ')}`} />
+            {base && (
+              <Box flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={1} rowGap={1}>
+                <Text color="inactive">Compare with</Text>
+                {shown.map(m => seg(`base-${m.id}`, names.get(m.id) ?? m.name, m === base, () => void choose($, { baseline: m.id })))}
+              </Box>
+            )}
+            {sp && <Draw svg={modelsSpend(sp, size.width, pal)} alt={modelsText({ ...learned, models: [] }, null, sp).join(' ')} />}
+          </>
+        ) : (
+          <Box flexDirection="column">
+            <Text bold>Models</Text>
+            {modelsText(learned, base, sp).map(line => <Text>{line}</Text>)}
+            {base && (
+              <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+                <Text color="inactive">Compare with</Text>
+                {shown.map(m => seg(`base-${m.id}`, names.get(m.id) ?? m.name, m === base, () => void choose($, { baseline: m.id })))}
+              </Box>
+            )}
+          </Box>
+        )}
+      </Box>
+    )
+
     if (!week && !five) {
       return (
         <Box flexDirection="column" gap={1}>
@@ -484,6 +520,7 @@ export const register: Register = on => {
         {five
           ? block('5-hour window', five, Svg ? (emptyChartText(five, now) ? emptyChartSvg(five, now, size.width, pal) : fiveChart(five, now, size.width, pal, size.fiveHeight)) : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
           : <Text dimColor>No active 5-hour window.</Text>}
+        {modelsCard}
       </Box>
     )
   })
