@@ -35,10 +35,29 @@ test('rounding wobble inside one window is not counted twice', async () => {
 test('after a reset the new window counts from zero', async () => {
   const before: RangeReading = [T0 - 2 * HOUR, 1, 95, T0 - HOUR]
   const after: RangeReading = [T0, 1, 3, T0 - HOUR + 7 * DAY]
-  const incs = increments([before, after], 'week')
+  // watched throughout, so the rise sits in the minutes before the reading
+  const incs = increments([before, after], 'week', [[T0 - 3 * HOUR, T0]])
   expect(incs.length).toBe(1)
   expect(incs[0]!.amount).toBe(3)
   expect(Math.round(usedBetween(incs, T0 - 10 * MIN, T0) * 1000)).toBe(3000)
+})
+
+test('usage from a gap this computer slept through goes into the current 5-hour window', async () => {
+  // the laptop's last reading was 18h ago; the desktop then worked 13:00–15:00 (2h ago to now),
+  // opening a 5-hour window 2h ago; the laptop wakes now and sees the week rise 40 → 46
+  const weekly: RangeReading[] = [[T0 - 18 * HOUR, 1, 40, weekReset], [T0, 1, 46, weekReset]]
+  const five: RangeReading = [T0, 0, 30, T0 + 3 * HOUR]
+  const incs = increments([...weekly, five], 'week', [[T0 - 19 * HOUR, T0 - 18 * HOUR]])
+  expect(incs.length).toBe(1)
+  expect(incs[0]!.start).toBe(T0 - 2 * HOUR)
+  expect(incs[0]!.hole).toEqual([T0 - 18 * HOUR, T0 - 2 * HOUR])
+  expect(Math.round(usedBetween(incs, T0 - 2 * HOUR, T0))).toBe(6)
+
+  // with no 5-hour window opened in the gap, the rise is spread evenly over it
+  const even = increments(weekly, 'week', [])
+  expect(even[0]!.start).toBe(T0 - 18 * HOUR)
+  expect(even[0]!.hole).toEqual([T0 - 18 * HOUR, T0])
+  expect(Math.round(usedBetween(even, T0 - 9 * HOUR, T0))).toBe(3)
 })
 
 test('without enough behind the average there is no estimate', async () => {

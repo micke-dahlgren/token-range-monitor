@@ -72,22 +72,70 @@ export function merge(lists: ReadonlyArray<readonly RangeReading[]>, now: number
   return out.sort((a, b) => a[0] - b[0])
 }
 
-export type Increment = { start: number; end: number; amount: number }
+/** A stretch of time some session on this computer was open and taking readings: [from, to] in ms. */
+export type Watch = [number, number]
+
+/** Two heartbeats further apart than this leave a hole: the computer wasn't watching in between. */
+export const WATCH_GAP = 2.5 * MIN
+
+/** Whether [a, b] lies wholly inside the watched spans. */
+export function isWatched(seen: readonly Watch[], a: number, b: number): boolean {
+  let t = a
+  for (const [s, e] of [...seen].sort((x, y) => x[0] - y[0])) {
+    if (s > t + WATCH_GAP) break
+    t = Math.max(t, e)
+    if (t >= b - WATCH_GAP) return true
+  }
+  return t >= b - WATCH_GAP
+}
+
+/** Adds a heartbeat at `now`: extends the last span when it is recent, else starts one. */
+export function heartbeat(seen: readonly Watch[], now: number): Watch[] {
+  const last = seen[seen.length - 1]
+  const kept = seen.filter(w => w[1] >= now - KEEP)
+  if (last && now - last[1] <= WATCH_GAP) return [...kept.slice(0, -1), [last[0], now]]
+  return [...kept, [now, now]]
+}
+
+export type Increment = {
+  start: number
+  end: number
+  amount: number
+  /** Time inside the gap this computer didn't watch and nothing was placed in: drawn as "not watched". */
+  hole?: [number, number]
+}
 
 /**
- * Usage gained between readings, each spread over the time before the reading
- * that saw it. Within one window only rises past the highest reading so far
- * count, so rounding wobble isn't counted twice; across a reset, the new
- * window's whole reading counts.
+ * Usage gained between readings. Within one window only rises past the highest
+ * reading so far count, so rounding wobble isn't counted twice; across a reset,
+ * the new window's whole reading counts.
+ *
+ * Where it goes in time: while this computer was watching, a rise sits in the
+ * minutes before the reading that saw it. A rise over a gap the computer
+ * wasn't watching came from elsewhere (another computer, claude.ai): it goes
+ * into the account's current 5-hour window when that opened inside the gap,
+ * since a 5-hour window opens with the first message of a stretch of work;
+ * with no such clue it is spread evenly over the gap.
  */
-export function increments(readings: readonly RangeReading[], kind: Kind): Increment[] {
+export function increments(readings: readonly RangeReading[], kind: Kind, seen: readonly Watch[] = []): Increment[] {
   const rs = ofKind(readings, kind)
+  const fives = ofKind(readings, 'five')
   const out: Increment[] = []
   let high = rs[0]?.[2] ?? 0
   for (let i = 1; i < rs.length; i++) {
     const a = rs[i - 1]!, b = rs[i]!
     let amount: number
-    let start = b[0] - Math.min(b[0] - a[0], SPREAD)
+    let start: number
+    let hole: [number, number] | undefined
+    if (b[0] - a[0] <= SPREAD || isWatched(seen, a[0], b[0])) {
+      start = b[0] - Math.min(b[0] - a[0], SPREAD)
+    } else {
+      let five: RangeReading | undefined
+      for (const f of fives) if (f[0] <= b[0] + MIN) five = f
+      const fiveStart = five && five[3] > b[0] ? five[3] - SPAN.five : undefined
+      start = fiveStart !== undefined && fiveStart > a[0] ? fiveStart : a[0]
+      hole = [a[0], start > a[0] ? start : b[0]]
+    }
     if (sameWindow(a, b)) {
       amount = b[2] - high
       high = Math.max(high, b[2])
@@ -96,7 +144,7 @@ export function increments(readings: readonly RangeReading[], kind: Kind): Incre
       high = b[2]
       start = Math.max(start, b[3] - SPAN[kind])
     }
-    if (amount > 0) out.push({ start: Math.min(start, b[0] - 1), end: b[0], amount })
+    if (amount > 0) out.push({ start: Math.min(start, b[0] - 1), end: b[0], amount, ...(hole ? { hole } : {}) })
   }
   return out
 }
@@ -132,6 +180,8 @@ export type Model = {
   winH: number
   /** When recording of this limit began (ms): before it the chart has no bars. */
   recordedFrom: number
+  /** Stretches this computer wasn't watching, where nothing was placed: drawn as "not watched". */
+  holes: Array<[number, number]>
   /** Why there is no estimate, when there isn't enough behind the average; then the rate and what follows from it mean nothing. */
   noData: string | null
   increments: Increment[]
@@ -142,7 +192,7 @@ export type Model = {
  * average `avg`. With too little behind that average (a window longer than
  * the record, or just after a reset) there is no estimate: `noData` says why.
  */
-export function project(readings: readonly RangeReading[], kind: Kind, now: number, avg: Average): Model | null {
+export function project(readings: readonly RangeReading[], kind: Kind, now: number, avg: Average, seen: readonly Watch[] = []): Model | null {
   const rs = ofKind(readings, kind)
   const last = rs[rs.length - 1]
   if (!last) return null
@@ -152,7 +202,7 @@ export function project(readings: readonly RangeReading[], kind: Kind, now: numb
     while (resetsAt <= now) resetsAt += SPAN.week
     pct = 0
   }
-  const incs = increments(rs, kind)
+  const incs = increments(readings, kind, seen)
   const recordedFrom = rs[0]![0]
   const from = avg.type === 'reset' ? resetsAt - SPAN[kind] : now - avg.hours * HOUR
   const winH = Math.max((now - from) / HOUR, 1 / 60)
@@ -169,7 +219,7 @@ export function project(readings: readonly RangeReading[], kind: Kind, now: numb
   const runsOutIn = rate > 0 ? remaining / rate : Infinity
   return {
     kind, pct, resetsAt, left, rate, limit: remaining / left, arrive: 100 - proj, over: proj > 100,
-    runsOutIn, early: Math.max(0, left - runsOutIn), average: avg, from, winH, recordedFrom, noData, increments: incs,
+    runsOutIn, early: Math.max(0, left - runsOutIn), average: avg, from, winH, recordedFrom, holes: incs.flatMap(i => (i.hole ? [i.hole] : [])), noData, increments: incs,
   }
 }
 
@@ -290,6 +340,8 @@ export type ChartSpec = {
   marks: Array<{ f: number; label: string }>
   /** The share of the chart, from the left, before recording began: hatched, no bars. */
   unrecorded: number
+  /** Stretches this computer wasn't watching, as shares of the chart: hatched, marked "not watched". */
+  holes: Array<[number, number]>
   unitLabel: string
 }
 
@@ -328,6 +380,12 @@ export function chartSvg(c: ChartSpec): string {
     const x1 = X(c.unrecorded)
     s += `<rect x="${padL + 1}" y="${padT + 1}" width="${Math.max(0, x1 - padL - 1)}" height="${base - padT - 2}" fill="url(#nr)"/>`
     if (x1 - padL > 90) s += text((padL + x1) / 2, base - 10, 'not recorded', { anchor: 'middle' })
+  }
+  for (const [f0, f1] of c.holes) {
+    const x0 = X(Math.max(f0, c.unrecorded)), x1 = X(f1)
+    if (x1 - x0 < 1) continue
+    s += `<rect x="${x0}" y="${padT + 1}" width="${x1 - x0}" height="${base - padT - 2}" fill="url(#nr)"/>`
+    if (x1 - x0 > 90) s += text((x0 + x1) / 2, base - 10, 'not watched', { anchor: 'middle' })
   }
   for (const mk of c.marks) {
     s += `<line x1="${X(mk.f)}" x2="${X(mk.f)}" y1="${padT}" y2="${base}" stroke="${C.dim}" stroke-dasharray="3 3"/>`
@@ -384,6 +442,10 @@ function timeChart(m: Model, now: number, width: number, height: number): string
     xTicks: [0, 0.25, 0.5, 0.75].map(f => ({ f, label: ago(m.winH * (1 - f)) })).concat({ f: 1, label: 'Now' }),
     marks,
     unrecorded: Math.min(1, Math.max(0, (m.recordedFrom - m.from) / (now - m.from))),
+    holes: m.holes
+      .map(([a, b]): [number, number] => [(a - m.from) / (now - m.from), (b - m.from) / (now - m.from)])
+      .filter(([a, b]) => b > 0 && a < 1)
+      .map(([a, b]): [number, number] => [Math.max(0, a), Math.min(1, b)]),
     unitLabel: `% per ${isWeek ? 'day' : 'hour'} · bar = ${barMin >= 60 ? dur(barMin / 60) : `${Math.max(1, Math.round(barMin))}m`}`,
   })
 }

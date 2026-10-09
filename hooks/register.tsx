@@ -1,9 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { RangeReading, RangeSettings } from '../types'
+import type { RangeReading, RangeSettings, RangeWatch } from '../types'
 import {
-  C, DEFAULT_SETTINGS, FIVE_WINDOW_MIN, MIN, MIN_RECORDED_H, UNIT_MAX, averageName, averageNote, chosenAverage,
+  C, DEFAULT_SETTINGS, FIVE_WINDOW_MIN, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, averageName, averageNote, chosenAverage,
   fiveChart, headerSvg, merge, needsMore, parseWindow, project, rateText, recordedHours, resetsIn,
   isShort, leftText, runsOut, weekChart, windowHours,
 } from './range'
@@ -14,25 +14,51 @@ const TITLE = 'Token Range Monitor'
 const readings = atom({ plugin: 'token-range-monitor', key: 'readings' } as const, [])
 const settings = atom({ plugin: 'token-range-monitor', key: 'settings' } as const, DEFAULT_SETTINGS)
 const tick = atom({ plugin: 'token-range-monitor', key: 'tick' } as const, 0)
+const seen = atom({ plugin: 'token-range-monitor', key: 'seen' } as const, [])
 
-/** Each session writes its readings under its own store key, so sessions never overwrite each other. */
+/**
+ * Each session writes its readings under its own store key (`r:`), and the
+ * spans it was watching under the twin key (`w:`), so sessions never overwrite each other.
+ */
 const OWN_PREFIX = 'r:'
+const SEEN_PREFIX = 'w:'
+const seenKeyOf = (key: string) => SEEN_PREFIX + key.slice(OWN_PREFIX.length)
 const newOwnKey = (now: number) => `${OWN_PREFIX}${now.toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
 
 let ownKey = ''
 let own: RangeReading[] = []
+let ownSeen: RangeWatch[] = []
+let othersSeen: RangeWatch[] = []
 
 async function loadAll($: EngineInterface) {
   const now = await $.clock.now()
   const lists: RangeReading[][] = [own]
+  const spans: RangeWatch[] = []
   for (const key of await $.store.keys()) {
+    if (key.startsWith(SEEN_PREFIX) && key !== seenKeyOf(ownKey)) {
+      const list = ((await $.store.get(key)) ?? []) as RangeWatch[]
+      if (list.every(w => w[1] < now - KEEP)) await $.store.delete(key)
+      else spans.push(...list)
+      continue
+    }
     if (!key.startsWith(OWN_PREFIX) || key === ownKey) continue
     const list = ((await $.store.get(key)) ?? []) as RangeReading[]
     // drop other sessions' lists once everything in them has aged out
-    if (list.every(r => r[0] < now - 22 * 24 * 60 * MIN)) await $.store.delete(key)
+    if (list.every(r => r[0] < now - KEEP)) await $.store.delete(key)
     else lists.push(list)
   }
+  othersSeen = spans
   await update($, readings, () => merge(lists, now))
+  await update($, seen, () => [...othersSeen, ...ownSeen])
+}
+
+/** Notes that this session is open and watching now, for telling usage seen here from usage made elsewhere. */
+async function watch($: EngineInterface) {
+  const now = await $.clock.now()
+  if (!ownKey) ownKey = newOwnKey(now)
+  ownSeen = heartbeat(ownSeen, now)
+  await $.store.set(seenKeyOf(ownKey), ownSeen)
+  await update($, seen, () => [...othersSeen, ...ownSeen])
 }
 
 async function capture($: EngineInterface, limits: readonly SessionRateLimit[]) {
@@ -58,6 +84,7 @@ async function capture($: EngineInterface, limits: readonly SessionRateLimit[]) 
 
 async function models($: EngineInterface) {
   const list = await read($, readings)
+  const watched = await read($, seen)
   const s = await read($, settings)
   await read($, tick)
   const now = await $.clock.now()
@@ -67,8 +94,8 @@ async function models($: EngineInterface) {
   const fiveAvg: Average = { type: 'hours', hours: FIVE_WINDOW_MIN / 60 }
   return {
     now, s, weekRecorded,
-    week: project(list, 'week', now, weekAvg),
-    five: project(list, 'five', now, fiveAvg),
+    week: project(list, 'week', now, weekAvg, watched),
+    five: project(list, 'five', now, fiveAvg, watched),
   }
 }
 
@@ -95,6 +122,7 @@ export const register: Register = on => {
     const now = await $.clock.now()
     ownKey = newOwnKey(now)
     own = []
+    ownSeen = []
     const saved = (await $.store.get('settings')) as RangeSettings | undefined
     // a saved "everything recorded" (now retired) becomes the custom window it sat beside
     if (saved) await update($, settings, () => ({ ...DEFAULT_SETTINGS, ...saved, mode: saved.mode === 'reset' ? 'reset' : 'window' }))
@@ -105,10 +133,12 @@ export const register: Register = on => {
     })
     await loadAll($)
     await capture($, (await $.session.usage()).rateLimits)
+    await watch($)
     // once a minute: pick up other sessions' readings and move "now" along
     $.clock.every(60_000, async () => {
       await loadAll($)
       await capture($, (await $.session.usage()).rateLimits)
+      await watch($)
       await update($, tick, n => n + 1)
     })
     return next(e)
@@ -116,6 +146,7 @@ export const register: Register = on => {
 
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('rateLimits')) await capture($, e.rateLimits)
+    await watch($)
     return next(e)
   })
 
