@@ -4,7 +4,9 @@ A Claude Code mod that tells you, like an electric car's range display, whether 
 
 It watches the weekly and 5-hour usage limits of your Claude Pro or Max subscription. It projects what will be left of each one when it resets, if you keep using Claude at the rate you have been.
 
-![The Token Range Monitor pane: weekly and 5-hour cards with usage charts](docs/pane.png)
+<!-- Screenshot: add docs/pane.png and uncomment
+![The Token Range Monitor pane](docs/pane.png)
+-->
 
 ## Install
 
@@ -26,7 +28,7 @@ claude plugin update token-range-monitor
 
 **Above the prompt**, one line:
 
-![The readout above the prompt: left at week reset −43%, resets in 6.1 days, left at 5h reset +83%](docs/band.png)
+> Left at week reset **−25%** · Resets in 3.7 days · Left at 5h reset **+12%** · Details
 
 - **Left at reset** is what's projected to remain of the limit when it resets, at your current rate. A positive value (green) means you'll make it with that much to spare. A negative value (red) means you'd need that much more than you have.
 - Click **Resets in…** to switch between days and hours (or hours and minutes for the 5-hour window).
