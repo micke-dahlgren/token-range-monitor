@@ -113,8 +113,8 @@ test("signed in: this computer's lists go up as one list per day, another device
   // the other device's week now shows here
   expect(await pane.find({ type: 'Text', text: 'No weekly limit reported.' })).toBeUndefined()
   expect(await pane.find({ type: 'Text', text: 'This week' })).toBeDefined()
-  expect((await pane.find({ type: 'Text', text: /^Synced as me@example\.com$/ }))).toBeDefined()
-  expect(await pane.find({ type: 'Text', text: 'last sync just now' })).toBeDefined()
+  expect((await pane.find({ type: 'Text', text: /^Synced as me@example\.com · / }))).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /last sync just now/ })).toBeDefined()
 
   // two lists on the server (the other device's, and this one's just sent), one per page: the second asked for at once with the cursor
   const gets = server.reqs.filter(r => r.method === 'GET')
@@ -124,7 +124,7 @@ test("signed in: this computer's lists go up as one list per day, another device
   await clock.advance(10 * MIN)
   expect(server.count('PUT', '/v1/lists')).toBe(1)
   expect(server.reqs.filter(r => r.method === 'GET').at(-1)!.query.since).toBe('2')
-  expect(await pane.find({ type: 'Text', text: 'last sync just now' })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /last sync just now/ })).toBeDefined()
 
   // a new reading here: the next sync sends today's list again, now holding it; the other device's never
   await $.session.measure({ context: {} as never, rateLimits: [{ kind: 'five_hour', percentUsed: 35, resetsAt: new Date(fiveReset).toISOString() }], changed: ['rateLimits'] })
@@ -250,8 +250,9 @@ test('signing in: a code and a page, asked at the interval until it says yes, th
     expect(await p.find({ type: 'Text', text: 'Waiting for sign-in… code ABCD-EFGH' })).toBeDefined()
     expect(await p.find({ key: 'sync-cancel' })).toBeDefined()
     expect((await p.find({ type: 'Link' }))?.props.href).toBe(`${DEFAULT_SERVER}/link?code=ABCD-EFGH`)
-    expect((await p.find({ type: 'Link' }))?.children).toEqual([`${DEFAULT_SERVER}/link?code=ABCD-EFGH`])
-    expect(await p.find({ type: 'Text', text: /check the page shows ABCD-EFGH/ })).toBeDefined()
+    expect((await p.find({ type: 'Link' }))?.props.label).toBe('the sign-in page')
+    expect(await p.find({ type: 'Text', text: /check it shows ABCD-EFGH/ })).toBeDefined()
+    expect(await p.find({ type: 'Text', text: `${DEFAULT_SERVER}/link?code=ABCD-EFGH` })).toBeDefined()
     if (p !== pane) await p.unmount()
   }
 
@@ -267,8 +268,8 @@ test('signing in: a code and a page, asked at the interval until it says yes, th
       plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor',
       props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
     })
-    expect(await p.find({ type: 'Text', text: 'Synced as me@example.com' })).toBeDefined()
-    expect(await p.find({ type: 'Text', text: 'last sync just now' })).toBeDefined()
+    expect(await p.find({ type: 'Text', text: /^Synced as me@example\.com · / })).toBeDefined()
+    expect(await p.find({ type: 'Text', text: /last sync just now/ })).toBeDefined()
     expect((await p.find({ key: 'sync-signout' }))?.props.label).toBe('Sign out')
     expect((await p.find({ key: 'sync-delete' }))?.props.label).toBe('Delete synced data')
     // the other device's week is in the record now
@@ -280,7 +281,7 @@ test('signing in: a code and a page, asked at the interval until it says yes, th
   expect(server.count('POST', '/v1/link/poll')).toBe(2)
   // the pane redraws each minute: synced at 0:07, drawn at 4:00
   await clock.advance(3 * MIN + 30_000)
-  expect(await pane.find({ type: 'Text', text: 'last sync 3 min ago' })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /last sync 3 min ago/ })).toBeDefined()
 
   // signing out unlinks the device and takes the other device's lists away
   await pane.press({ key: 'sync-signout' })

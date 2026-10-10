@@ -51,6 +51,11 @@ let othersSeen: RangeWatch[] = []
 let ownSteps: RangeStep[] = []
 let othersSteps: RangeStep[] = []
 
+/** The home folder: HOME, or on Windows, where the desktop app often leaves HOME unset, USERPROFILE. */
+async function homeOf($: EngineInterface): Promise<string> {
+  return (await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || ''
+}
+
 /**
  * The signed-in account and organisation, from Claude Code's own config:
  * the limits belong to both. `none` off a subscription, which has no limits.
@@ -59,7 +64,7 @@ let accountRead: { mtime: number; account: string } | undefined
 async function accountOf($: EngineInterface): Promise<string | null> {
   try {
     const dir = await $.env.get('CLAUDE_CONFIG_DIR')
-    const file = dir ? `${dir}/.claude.json` : `${(await $.env.get('HOME')) ?? ''}/.claude.json`
+    const file = dir ? `${dir}/.claude.json` : `${await homeOf($)}/.claude.json`
     // the file is read again only once it changed
     const { mtimeMs } = await $.fs.stat(file)
     if (accountRead?.mtime === mtimeMs) return accountRead.account
@@ -94,7 +99,7 @@ async function followAccount($: EngineInterface): Promise<boolean> {
  */
 async function otherCopies($: EngineInterface): Promise<Array<[string, unknown]>> {
   try {
-    const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? ''}/.claude`
+    const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await homeOf($)}/.claude`
     const stores = `${dir}/plugins/store`
     const out: Array<[string, unknown]> = []
     for (const f of await $.fs.list(stores)) {
@@ -122,7 +127,8 @@ async function localLists($: EngineInterface, now: number) {
   // the other copies' lists, read as they stand; this copy's own file is among them, and merging drops the repeats
   for (const [key, value] of await otherCopies($)) {
     const k = parseKey(key)
-    if (!k || !Array.isArray(value) || (k[1] !== undefined && k[1] !== account)) continue
+    // a record kept under none was this account's too (see below)
+    if (!k || !Array.isArray(value) || (k[1] !== undefined && k[1] !== account && !(k[1] === 'none' && account !== 'none'))) continue
     if (k[2] === 'w') spans.push(...(value as RangeWatch[]))
     else if (k[2] === 'u') stepLists.push(value as RangeStep[])
     else lists.push(value as RangeReading[])
@@ -138,6 +144,11 @@ async function localLists($: EngineInterface, now: number) {
     if (whose === undefined) {
       // a record kept before accounts: it was this account's, so it moves under it
       await $.store.set(`${account}/${key}`, list)
+      await $.store.delete(key)
+    } else if (whose === 'none' && account && account !== 'none') {
+      // kept while the account couldn't be read (HOME unset, as on Windows): only a subscription reports
+      // limits, so the record was this account's all along, and it moves under it
+      await $.store.set(`${account}/${key.slice('none/'.length)}`, list)
       await $.store.delete(key)
     } else if (whose !== account) continue
     if (kind === 'w') spans.push(...(list as RangeWatch[]))
@@ -262,7 +273,7 @@ async function capture($: EngineInterface, limits: readonly SessionRateLimit[]) 
 let themeFile: { slug: string; path: string } | undefined
 async function loadTheme($: EngineInterface) {
   const setting = ((await $.settings.read()) as { theme?: unknown }).theme
-  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? ''}/.claude`
+  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await homeOf($)}/.claude`
   const theme = await resolveTheme(setting, async slug => {
     // found once, then read where it was; searched again only if it's gone
     if (themeFile?.slug === slug && await $.fs.exists(themeFile.path)) return await $.fs.read(themeFile.path)
@@ -600,42 +611,33 @@ export const register: Register = (on, options) => {
 
     // sync across devices: one quiet row under the cards, the same on every surface
     const syncRow = (v: RangeSync) => {
-      const dot = <Text color="inactive">·</Text>
       return (
         <Box key="sync" flexDirection="column" gap={1} marginTop={1}>
+          {/* the row's parts as one flat list: a fragment here is drawn as a column of its own on the desktop */}
           <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
-            {v.status === 'signedIn' ? (
-              <>
-                <Text color="inactive">{`Synced as ${v.email || 'you'}`}</Text>
-                {dot}
-                <Text color="inactive">{`last sync ${agoText(v.last, now)}`}</Text>
-                {dot}
-                <Button key="sync-signout" label="Sign out" dimColor={!!v.busy} onPress={() => void signOut(syncIO($))} />
-                {dot}
-                <Button key="sync-delete" label={v.confirmDelete ? 'Press again to delete all synced data' : 'Delete synced data'}
-                  variant={v.confirmDelete ? 'primary' : 'secondary'} dimColor={!!v.busy} onPress={() => void deleteSynced(syncIO($))} />
-              </>
-            ) : v.status === 'waiting' ? (
-              <>
-                <Text color="inactive">{`Waiting for sign-in… code ${v.code ?? ''}`}</Text>
-                {dot}
-                <Button key="sync-cancel" label="Cancel" onPress={() => void cancelSignIn(syncIO($))} />
-              </>
-            ) : (
-              <>
-                <Text color="inactive">Sync across devices</Text>
-                {dot}
-                {v.status === 'off'
-                  ? <Text color="inactive">off</Text>
-                  : <Button key="sync-signin" label="Sign in" dimColor={!!v.busy} onPress={() => void signIn(syncIO($))} />}
-              </>
-            )}
+            {v.status === 'signedIn'
+              ? [
+                  <Text key="who" color="inactive">{`Synced as ${v.email || 'you'} · last sync ${agoText(v.last, now)} ·`}</Text>,
+                  <Button key="sync-signout" label="Sign out" dimColor={!!v.busy} onPress={() => void signOut(syncIO($))} />,
+                  <Button key="sync-delete" label={v.confirmDelete ? 'Press again to delete all synced data' : 'Delete synced data'}
+                    variant={v.confirmDelete ? 'primary' : 'secondary'} dimColor={!!v.busy} onPress={() => void deleteSynced(syncIO($))} />,
+                ]
+              : v.status === 'waiting'
+                ? [
+                    <Text key="waiting" color="inactive">{`Waiting for sign-in… code ${v.code ?? ''} ·`}</Text>,
+                    <Button key="sync-cancel" label="Cancel" onPress={() => void cancelSignIn(syncIO($))} />,
+                  ]
+                : [
+                    <Text key="title" color="inactive">{v.status === 'off' ? 'Sync across devices · off' : 'Sync across devices ·'}</Text>,
+                    ...(v.status === 'off' ? [] : [<Button key="sync-signin" label="Sign in" dimColor={!!v.busy} onPress={() => void signIn(syncIO($))} />]),
+                  ]}
           </Box>
           {/* the page to sign in on, as a link and as text to copy: it shows the same code */}
           {v.status === 'waiting' && v.url && (
             <Box flexDirection="column">
-              <Link href={v.url}>{v.url}</Link>
-              <Text dimColor>{`Sign in there and check the page shows ${v.code ?? 'the same code'}.`}</Text>
+              {/* the link inside a Text, as the inline element it is; the address again as plain text to copy */}
+              <Text>Open <Link href={v.url} label="the sign-in page" /> and check it shows {v.code ?? 'the same code'}.</Text>
+              <Text dimColor>{v.url}</Text>
             </Box>
           )}
           {v.note && <Text dimColor>{v.note}</Text>}
