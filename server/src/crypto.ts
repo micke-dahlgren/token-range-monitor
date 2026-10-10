@@ -39,6 +39,16 @@ export async function hmacHex(secret: string, data: string): Promise<string> {
   return hex(await crypto.subtle.sign('HMAC', await hmacKey(secret), enc.encode(data)))
 }
 
+/** String equality whose running time does not depend on where the strings differ (lengths are not secret). */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const x = enc.encode(a)
+  const y = enc.encode(b)
+  if (x.length !== y.length) return false
+  let diff = 0
+  for (let i = 0; i < x.length; i++) diff |= x[i]! ^ y[i]!
+  return diff === 0
+}
+
 /** `<base64url(json)>.<base64url(hmac)>` */
 export async function signValue(secret: string, value: unknown): Promise<string> {
   const body = base64url(enc.encode(JSON.stringify(value)))

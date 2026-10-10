@@ -29,13 +29,21 @@ const PAGE_HEADERS = {
   'cache-control': 'no-store',
   'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'x-content-type-options': 'nosniff',
-  // link and callback URLs carry the link code / OAuth code: never leak them
+  // callback URLs carry the OAuth code: never leak them
   'referrer-policy': 'no-referrer',
 }
 
+/**
+ * An HTML page with the strict default headers. A `content-security-policy`
+ * entry in `headers` replaces the default policy (a second CSP header would
+ * only tighten it); everything else is appended (e.g. several set-cookie).
+ */
 export function html(body: string, status = 200, headers: Record<string, string> | [string, string][] = []): Response {
   const h = new Headers(PAGE_HEADERS)
-  for (const [k, v] of Array.isArray(headers) ? headers : Object.entries(headers)) h.append(k, v)
+  for (const [k, v] of Array.isArray(headers) ? headers : Object.entries(headers)) {
+    if (k.toLowerCase() === 'content-security-policy') h.set(k, v)
+    else h.append(k, v)
+  }
   return new Response(body, { status, headers: h })
 }
 
@@ -45,11 +53,11 @@ export function redirect(location: string, headers: [string, string][] = []): Re
   return new Response(null, { status: 302, headers: h })
 }
 
-/** The JSON body as an object (empty body → {}), capped at MAX_BODY_BYTES. */
-export async function readJson(req: Request): Promise<Record<string, unknown>> {
+/** The raw body as text (empty body → ''), capped at `max` bytes (413 beyond). */
+export async function readText(req: Request, max = MAX_BODY_BYTES): Promise<string> {
   const declared = Number(req.headers.get('content-length') ?? '0')
-  if (declared > MAX_BODY_BYTES) throw new HttpError(413, 'body_too_large')
-  if (!req.body) return {}
+  if (declared > max) throw new HttpError(413, 'body_too_large')
+  if (!req.body) return ''
   const reader = req.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0
@@ -57,7 +65,7 @@ export async function readJson(req: Request): Promise<Record<string, unknown>> {
     const { done, value } = await reader.read()
     if (done) break
     size += value.byteLength
-    if (size > MAX_BODY_BYTES) {
+    if (size > max) {
       await reader.cancel()
       throw new HttpError(413, 'body_too_large')
     }
@@ -69,7 +77,12 @@ export async function readJson(req: Request): Promise<Record<string, unknown>> {
     bytes.set(c, at)
     at += c.byteLength
   }
-  const text = new TextDecoder().decode(bytes).trim()
+  return new TextDecoder().decode(bytes)
+}
+
+/** The JSON body as an object (empty body → {}), capped at MAX_BODY_BYTES. */
+export async function readJson(req: Request): Promise<Record<string, unknown>> {
+  const text = (await readText(req)).trim()
   if (!text) return {}
   let parsed: unknown
   try {
@@ -79,6 +92,11 @@ export async function readJson(req: Request): Promise<Record<string, unknown>> {
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HttpError(400, 'invalid_json')
   return parsed as Record<string, unknown>
+}
+
+/** An `application/x-www-form-urlencoded` body (the sign-in form), capped at `max` bytes. */
+export async function readForm(req: Request, max = 4096): Promise<URLSearchParams> {
+  return new URLSearchParams(await readText(req, max))
 }
 
 export function bearer(req: Request): string | null {

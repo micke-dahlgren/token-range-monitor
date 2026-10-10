@@ -2,10 +2,10 @@
 import type { Deps, Env } from './env'
 import { HttpError, html, json, jsonError } from './http'
 import { purgeIdleDevices } from './db'
-import { linkPageHandler, pollLink, purgeExpiredCodes, startLink } from './link'
+import { linkPageHandler, linkSubmitHandler, pollLink, purgeExpiredCodes, startLink } from './link'
 import { getLists, purgeOldLists, putLists } from './lists'
-import { deleteDevice, deleteMe, getMe } from './me'
-import { callback, startAuth } from './oauth'
+import { deleteDevice, deleteMe, deleteOtherDevice, getMe, renameDevice } from './me'
+import { callback } from './oauth'
 import { landingPage, privacyPage } from './pages'
 
 type Handler = (req: Request, env: Env, deps: Deps) => Promise<Response> | Response
@@ -14,20 +14,28 @@ type Handler = (req: Request, env: Env, deps: Deps) => Promise<Response> | Respo
 const ROUTES: Record<string, Record<string, Handler>> = {
   '/': { GET: () => html(landingPage()) },
   '/privacy': { GET: () => html(privacyPage()) },
-  '/link': { GET: linkPageHandler },
+  // OAuth starts only from the form's POST (CSRF + typed code); there is no GET route that starts it
+  '/link': { GET: linkPageHandler, POST: linkSubmitHandler },
   '/v1/link/start': { POST: startLink },
   '/v1/link/poll': { POST: pollLink },
   '/v1/me': { GET: getMe, DELETE: deleteMe },
-  '/v1/device': { DELETE: deleteDevice },
+  '/v1/device': { PUT: renameDevice, DELETE: (r, e, d) => deleteDevice(r, e, d) },
   '/v1/lists': { GET: getLists, PUT: putLists },
-  '/auth/google/start': { GET: (r, e, d) => startAuth('google', r, e, d) },
   '/auth/google/callback': { GET: (r, e, d) => callback('google', r, e, d) },
-  '/auth/github/start': { GET: (r, e, d) => startAuth('github', r, e, d) },
   '/auth/github/callback': { GET: (r, e, d) => callback('github', r, e, d) },
 }
 
+/** `/v1/devices/<id>` → its routes (the only path with a parameter). */
+function paramRoute(path: string): Record<string, Handler> | undefined {
+  const m = /^\/v1\/devices\/([A-Za-z0-9-]{1,64})$/.exec(path)
+  if (!m) return undefined
+  const id = m[1]!
+  return { DELETE: (r, e, d) => deleteOtherDevice(id, r, e, d) }
+}
+
 export async function handle(req: Request, env: Env, deps: Deps): Promise<Response> {
-  const route = ROUTES[new URL(req.url).pathname]
+  const path = new URL(req.url).pathname
+  const route = ROUTES[path] ?? paramRoute(path)
   if (!route) return jsonError(404, 'not_found')
   const method = req.method === 'HEAD' ? 'GET' : req.method
   const handler = route[method]

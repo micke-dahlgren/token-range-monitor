@@ -1,6 +1,6 @@
 import type { HttpInit, HttpResponse } from 'claude-code'
 
-import type { RangeReading, RangeStep, RangeSync, RangeWatch } from '../types'
+import type { RangeDevice, RangeReading, RangeStep, RangeSync, RangeWatch } from '../types'
 import { DAY, HOUR, KEEP, MIN } from './range'
 
 /**
@@ -23,8 +23,10 @@ export const BACKOFF_BASE = 2 * MIN
 export const BACKOFF_MAX = HOUR
 /** How long a sign-in code is waited for at most. */
 export const LINK_TTL = 10 * MIN
-/** How long "Delete synced data" waits for its confirming press. */
+/** How long "Delete synced data" and a device's "Remove" wait for their confirming press. */
 export const CONFIRM_FOR = 10_000
+/** Opening the pane asks the server for the device list at most this often (each sync asks anyway). */
+export const DEVICES_FRESH = 30_000
 
 /** The server's limits, with some room left. */
 export const MAX_LIST_BYTES = 128 * 1024 - 1024
@@ -35,6 +37,8 @@ export const MAX_BODY_BYTES = 256 * 1024 - 8 * 1024
 export const DEVICE_KEY = 'sync:device'
 export const AUTH_KEY = 'sync:auth'
 export const LINK_KEY = 'sync:link'
+/** This computer's name as a command on the host found it, for sessions that can't run one (the desktop). */
+export const NAME_KEY = 'sync:name'
 /** Per Claude account: the download cursor, the fingerprint of each day list last uploaded, when it last synced. */
 export const acctKey = (account: string) => `sync:acct:${account}`
 /** A downloaded list, kept so a restart shows it offline. */
@@ -300,6 +304,45 @@ async function call(io: SyncIO, method: string, path: string, body?: unknown, to
   throw new SyncError(kind, res.status, code, detail, retryAfter)
 }
 
+/** What a computer is called when nothing better is known, by its platform. */
+export const GENERIC_NAMES = { mac: 'Mac', windows: 'Windows PC', linux: 'Linux computer', other: 'Computer' } as const
+export type Platform = keyof typeof GENERIC_NAMES
+const isGeneric = (name: string) => (Object.values(GENERIC_NAMES) as string[]).includes(name)
+
+/** A name as the server takes it: control characters out, trimmed, at most 64 characters; null when nothing is left. */
+export function cleanName(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const s = [...v.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim()].slice(0, 64).join('').trim()
+  return s || null
+}
+
+/** The platform as the environment gives it away: Windows sets OS, macOS sets __CF_USER_TEXT_ENCODING and keeps homes under /Users. */
+export function platformOf(env: { os?: string; cfEncoding?: string; home?: string }): Platform {
+  if (env.os === 'Windows_NT') return 'windows'
+  if (env.cfEncoding || env.home?.startsWith('/Users/')) return 'mac'
+  if (env.home?.startsWith('/home/') || env.home === '/root') return 'linux'
+  return 'other'
+}
+
+/** The server's device list, as far as it can be read. */
+export function parseDevices(v: unknown): RangeDevice[] {
+  if (!Array.isArray(v)) return []
+  const out: RangeDevice[] = []
+  for (const d of v as Array<Record<string, unknown>>) {
+    if (!d || typeof d.id !== 'string' || !d.id) continue
+    out.push({
+      id: d.id,
+      name: typeof d.name === 'string' && d.name ? d.name : null,
+      ...(isNum(d.lastSeenAt) ? { lastSeenAt: d.lastSeenAt } : {}),
+      current: d.current === true,
+    })
+  }
+  // this device first, the others as the server lists them (oldest link first)
+  return [...out.filter(d => d.current), ...out.filter(d => !d.current)]
+}
+
+export const deviceLabel = (d: { name: string | null }) => d.name ?? 'Unnamed device'
+
 // ---------------------------------------------------------------- state
 
 type Auth = { token: string; email: string; server: string }
@@ -320,7 +363,10 @@ export type SyncIO = {
   keys: () => Promise<string[]>
   /** `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, as set. */
   trafficOff: () => Promise<string | undefined>
-  /** The computer's name, for the server's list of devices. */
+  /**
+   * The computer's name, for the server's list of devices: its own name when
+   * one can be found, else a generic one for its platform ("Mac", "Windows PC").
+   */
   hostName: () => Promise<string | undefined>
   every: (ms: number, fn: () => void) => { cancel: () => void }
   after: (ms: number, fn: () => void) => { cancel: () => void }
@@ -356,6 +402,14 @@ const state = {
   confirm: null as { cancel: () => void } | null,
   /** Downloaded lists per account, by list key. */
   far: new Map<string, Map<string, DayData>>(),
+  /** The signed-in user's devices, as the server last listed them; when they were asked for. */
+  devices: undefined as RangeDevice[] | undefined,
+  devicesAt: 0,
+  /** The device a "Remove" is waiting on its confirming press for, and the timer that gives up on it. */
+  confirmRemove: undefined as string | undefined,
+  confirmRm: null as { cancel: () => void } | null,
+  /** Whether this session compared the server's name for this device with its own yet (once a session, and once after a sign-in). */
+  nameChecked: false,
 }
 
 /** Called as the module loads: a fresh load starts from nothing (its timers went with the old one). */
@@ -363,6 +417,7 @@ export function configureSync(server: unknown) {
   Object.assign(state, {
     home: null, started: false, disabled: false, device: '', auth: null, failures: 0, nextAt: 0, uploadPausedUntil: 0,
     uploadNote: undefined, rejectLogged: false, running: false, poll: null, polling: false, confirm: null, far: new Map(),
+    devices: undefined, devicesAt: 0, confirmRemove: undefined, confirmRm: null, nameChecked: false,
   })
   state.server = serverFrom(server)
 }
@@ -380,7 +435,11 @@ async function signedInView(io: SyncIO, note?: string): Promise<RangeSync> {
   const account = io.account()
   const last = usable(account) ? (await readAcct(io, account)).last : undefined
   const n = note ?? state.uploadNote ?? (usable(account) ? undefined : 'Syncs once Claude Code is signed in to a Pro or Max subscription.')
-  return { status: 'signedIn', email: state.auth?.email ?? '', ...(last !== undefined ? { last } : {}), ...(n ? { note: n } : {}) }
+  return {
+    status: 'signedIn', email: state.auth?.email ?? '', ...(last !== undefined ? { last } : {}), ...(n ? { note: n } : {}),
+    ...(state.devices ? { devices: state.devices } : {}),
+    ...(state.confirmRemove ? { confirmRemove: state.confirmRemove } : {}),
+  }
 }
 
 async function readAcct(io: SyncIO, account: string): Promise<AcctState> {
@@ -519,6 +578,7 @@ export async function syncNow(io: SyncIO) {
     await patchAcct(io, account, s => { s.last = now })
     await setView(io, await signedInView(io))
     if (got) await io.reload()
+    await refreshDevices(io)
   } catch (err) {
     if (state.auth === auth) await failed(io, err)
   } finally {
@@ -635,6 +695,11 @@ async function forget(io: SyncIO) {
   stopPolling()
   state.confirm?.cancel()
   state.confirm = null
+  state.confirmRm?.cancel()
+  state.confirmRm = null
+  state.confirmRemove = undefined
+  state.devices = undefined
+  state.devicesAt = 0
   await io.del(AUTH_KEY)
   for (const key of await io.keys()) {
     if (key.startsWith(CACHE_PREFIX) || key.startsWith('sync:acct:')) await io.del(key)
@@ -648,7 +713,7 @@ export async function signIn(io: SyncIO) {
   if (state.disabled || state.auth || state.poll || (await io.view()).busy) return
   await setView(io, v => ({ ...v, status: 'signedOut', busy: true }))
   try {
-    const name = (await io.hostName().catch(() => undefined))?.slice(0, 64)
+    const name = cleanName(await io.hostName().catch(() => undefined))
     const r = await call(io, 'POST', '/v1/link/start', name ? { deviceName: name } : {})
     const now = await io.now()
     if (typeof r.code !== 'string' || typeof r.url !== 'string' || !/^https?:\/\//.test(r.url) || typeof r.pollToken !== 'string') {
@@ -710,6 +775,9 @@ async function pollOnce(io: SyncIO, link: Link) {
       state.far.clear()
       state.failures = 0
       state.nextAt = 0
+      state.devices = undefined
+      // a fresh sign-in checks this device's name again
+      state.nameChecked = false
       await setView(io, await signedInView(io))
       await syncNow(io)
       await io.reload()
@@ -780,5 +848,113 @@ export async function deleteSynced(io: SyncIO) {
   }
   await forget(io)
   await setView(io, { status: 'signedOut', note: 'Deleted all synced data and signed out.' })
+  await io.reload()
+}
+
+// ---------------------------------------------------------------- the devices signed in
+
+/**
+ * Asks the server for the signed-in user's devices (GET /v1/me) and shows them.
+ * After each sync, and when the pane opens (`fresherThan`: not if asked that
+ * recently). The first time in a session, and after a sign-in, it also puts
+ * this computer's name right on the server when it has none or another one.
+ */
+export async function refreshDevices(io: SyncIO, fresherThan = 0) {
+  const auth = state.auth
+  if (state.disabled || !auth) return
+  const now = await io.now()
+  if (fresherThan && now - state.devicesAt < fresherThan) return
+  state.devicesAt = now
+  let r: Json
+  try {
+    r = await call(io, 'GET', '/v1/me', undefined, auth.token)
+  } catch (err) {
+    // a token gone is the next sync's to notice; anything else keeps the last list
+    return
+  }
+  if (state.auth !== auth) return
+  const devices = parseDevices(r.devices)
+  state.devices = devices
+  if (!state.nameChecked) {
+    state.nameChecked = true
+    const me = devices.find(d => d.current)
+    const want = cleanName(await io.hostName().catch(() => undefined))
+    // a generic name ("Mac") only fills a missing one: it never replaces a real name another session found
+    if (me && want && me.name !== want && (me.name === null || !isGeneric(want))) {
+      try {
+        const x = await call(io, 'PUT', '/v1/device', { name: want }, auth.token)
+        me.name = typeof x.name === 'string' ? x.name : want
+      } catch { /* tried again next session */ }
+    }
+  }
+  if (state.auth !== auth) return
+  await setView(io, v => (v.status === 'signedIn' ? { ...v, devices: state.devices ?? [] } : v))
+}
+
+/** Every downloaded list dropped and downloaded again: what a removed device uploaded leaves this record too. */
+async function downloadAgain(io: SyncIO) {
+  state.far.clear()
+  for (const key of await io.keys()) {
+    if (key.startsWith(CACHE_PREFIX)) await io.del(key)
+    else if (key.startsWith('sync:acct:')) {
+      const v = (await io.get(key)) as Partial<AcctState> | undefined
+      if (v && typeof v === 'object') {
+        const { cursor: _, ...rest } = v
+        await io.set(key, rest)
+      }
+    }
+  }
+}
+
+/**
+ * Removes another device of this account: the first press asks for a second,
+ * the second removes it on the server (its token stops working, its lists are
+ * deleted) and downloads the rest again, so its lists leave this record too.
+ */
+export async function removeDevice(io: SyncIO, id: string) {
+  const auth = state.auth
+  if (!auth) return
+  const v = await io.view()
+  if (v.busy) return
+  const device = state.devices?.find(d => d.id === id && !d.current)
+  if (!device) return
+  if (state.confirmRemove !== id) {
+    state.confirmRemove = id
+    await setView(io, { ...v, confirmRemove: id })
+    state.confirmRm?.cancel()
+    const home = state.home ?? io
+    state.confirmRm = home.after(CONFIRM_FOR, () => {
+      if (state.confirmRemove !== id) return
+      state.confirmRemove = undefined
+      void setView(home, x => {
+        const { confirmRemove: _, ...rest } = x
+        return rest
+      })
+    })
+    return
+  }
+  state.confirmRm?.cancel()
+  state.confirmRm = null
+  state.confirmRemove = undefined
+  const { confirmRemove: _, ...rest } = v
+  await setView(io, { ...rest, busy: true })
+  let note: string | undefined
+  try {
+    await call(io, 'DELETE', `/v1/devices/${encodeURIComponent(id)}`, undefined, auth.token)
+  } catch (err) {
+    const e = err instanceof SyncError ? err : null
+    if (e?.kind === 'auth') return void (await failed(io, e))
+    // 404: gone already, which is what was asked
+    if (e?.status !== 404) note = `Couldn't remove ${deviceLabel(device)}: ${e?.status ? `the server answered ${e.status}` : "the server couldn't be reached"}.`
+  }
+  if (state.auth !== auth) return
+  if (!note) {
+    state.devices = state.devices?.filter(d => d.id !== id)
+    await downloadAgain(io)
+  }
+  await setView(io, await signedInView(io, note))
+  if (note) return void (await refreshDevices(io))
+  // the sync asks for the device list again once it's through
+  await syncNow(io)
   await io.reload()
 }

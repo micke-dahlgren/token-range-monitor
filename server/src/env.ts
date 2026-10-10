@@ -13,6 +13,8 @@ export interface Env {
   SESSION_KEY?: string
   /** Workers Rate Limiting binding for /v1/lists, keyed by device id (see wrangler.toml). Unbound: no limit. */
   LISTS_LIMITER?: RateLimit
+  /** Workers Rate Limiting binding for code entry (POST /link), keyed by a hash of the client IP. Unbound: no limit. */
+  CODE_LIMITER?: RateLimit
 }
 
 /** Side effects the handlers use, injectable so tests can fake providers and time. */

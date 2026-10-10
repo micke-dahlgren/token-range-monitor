@@ -20,11 +20,13 @@ retention (15 days), per-device rate limiting.
 | --- | --- | --- |
 | `POST /v1/link/start` `{ deviceName? }` | none | Starts linking. Returns `{ code, url, pollToken, expiresIn, interval }`. Codes are `XXXX-XXXX`, live 10 minutes. |
 | `POST /v1/link/poll` `{ pollToken }` | none | `{status:"pending"}`, `{status:"expired"}`, or once (only once) `{status:"ok", deviceToken, email}`. |
-| `GET /link?code=` | browser | Page with the code and "Continue with Google / GitHub". |
-| `GET /auth/{google,github}/start?code=` | browser | Redirects to the provider with a signed state cookie. |
+| `GET /link` | browser | The sign-in page: a code field and "Continue with Google / GitHub" (one form). Sets the CSRF cookie. Any `?code=` is ignored. |
+| `POST /link` (form: `code`, `provider`, `csrf`) | browser | Checks CSRF, the per-IP attempt limit and the typed code, then redirects to the provider with a signed state cookie. |
 | `GET /auth/{google,github}/callback` | browser | Finishes sign-in, attaches the user to the code, shows the success page. |
-| `GET /v1/me` | `Bearer <deviceToken>` | `{ email, providers, devices:[{id,name,lastSeenAt,current}] }` |
-| `DELETE /v1/device` | Bearer | Unlinks the calling device. |
+| `GET /v1/me` | `Bearer <deviceToken>` | `{ email, providers, devices:[{id,name,createdAt,lastSeenAt,current}] }` (devices oldest link first) |
+| `PUT /v1/device` `{ name }` | Bearer | Sets the calling device's display name: control characters stripped, trimmed, 1–64 characters, else `400 invalid_name`. → `{ ok: true, name }` |
+| `DELETE /v1/device` | Bearer | Unlinks the calling device (sign out). Its lists stay. |
+| `DELETE /v1/devices/:id` | Bearer | Removes one of the caller's devices: its token stops working at once and the lists it uploaded (`lists.device_id`) are deleted. → `{ ok: true, listsDeleted }`. An unknown id and another user's device both answer `404 {"error":"not_found"}`. The caller's own id behaves exactly like `DELETE /v1/device` (its lists stay). |
 | `DELETE /v1/me` | Bearer | Deletes the user, identities, devices and lists. |
 | `PUT /v1/lists` | Bearer | Uploads lists for one Claude account. See [Lists sync](#lists-sync). |
 | `GET /v1/lists?account=&since=` | Bearer | Lists of one Claude account changed since a cursor. |
@@ -32,9 +34,68 @@ retention (15 days), per-device rate limiting.
 
 Anything else is `404 {"error":"not_found"}`. All timestamps are milliseconds.
 
-The mod's flow: call `start`, show the user `code` and open `url`, then call
-`poll` every `interval` seconds until it returns `ok` (store `deviceToken`) or
-`expired` (start over).
+The mod's flow: call `start`, show the user `code` and `url` (`<PUBLIC_URL>/link`,
+never with the code in it), then call `poll` every `interval` seconds until it
+returns `ok` (store `deviceToken`) or `expired` (start over). In the browser the
+user opens `/link`, **types** the code and picks Google or GitHub; see
+[Device sign-in](#device-sign-in-typed-code).
+
+## Device sign-in (typed code)
+
+1. The mod calls `POST /v1/link/start` and shows `code` (`XXXX-XXXX`) and `url`
+   (`<PUBLIC_URL>/link`).
+2. `GET /link` shows a form: one code field (`autocomplete="one-time-code"`,
+   `autocapitalize="characters"`, autofocus; accepts `XXXX-XXXX` or `XXXXXXXX`,
+   any case, spaces ignored) and two submit buttons, Continue with Google /
+   GitHub (a provider not configured is disabled). It sets the CSRF cookie and
+   puts `HMAC-SHA256(SESSION_KEY, "csrf:" + token)` in a hidden field. An
+   existing valid cookie is reused, so several open tabs keep working.
+3. `POST /link` checks, in order:
+   - CSRF: the cookie must be present and the hidden field must equal its HMAC
+     (constant-time compare). Otherwise `403` "This sign-in page expired, please
+     reload…" and no OAuth state cookie.
+   - The attempt limit (`CODE_LIMITER`, 10 per 60 s per IP). Otherwise `429`
+     with the form and "Too many attempts, wait a minute.", `retry-after: 60`.
+   - The code: it must exist, be unexpired, unclaimed and not yet signed in.
+     Otherwise `400` with the form and one message for every kind of failure:
+     "That code isn't valid or has expired. Check Claude Code for the current code."
+   - Then exactly the old start step: signed state cookie + PKCE, `302` to the
+     provider. The callback is unchanged.
+
+**CSRF cookie:** over https `__Host-trm_csrf=<random 32 bytes>; Path=/; HttpOnly;
+Secure; SameSite=Strict; Max-Age=900`. When `PUBLIC_URL` is plain `http://`
+(local dev on `http://localhost:8787`) it is `trm_csrf` with the same
+attributes but without `Secure`, since browsers may refuse `Secure` and
+`__Host-` cookies over http.
+
+**CSP of `/link`:** like every page (`default-src 'none'`, no scripts), except
+`form-action 'self' https://accounts.google.com https://github.com`. Browsers
+apply `form-action` to the redirect that follows a form POST too, so the
+providers' authorize origins must be listed or the 302 is blocked. All other
+pages keep `form-action 'none'`.
+
+**Why:** with the code in the link, someone could start a link on *their*
+machine and send the victim the URL; the victim signs in and the attacker's
+device is linked to the victim's account. Anything in a URL, or in a form
+another site auto-submits, is attacker-controlled. Now the code is never in a
+URL, OAuth only starts from `POST /link` (there is no `GET` route that starts it:
+`/auth/{google,github}/start` are gone and answer 404), a cross-site POST lacks
+the `SameSite=Strict` cookie and cannot read the hidden field, and the user has
+to type a code they read in their own Claude Code. As a safety net, the mod
+lists the account's devices with a Remove button (`GET /v1/me`,
+`DELETE /v1/devices/:id`).
+
+**Guessing codes:** codes are 8 symbols from a 32-symbol alphabet (2^40 ≈ 1.1 × 10^12
+values) and live 10 minutes. With 10 attempts per minute per IP an attacker gets
+100 guesses per IP per code lifetime; even with, say, 10,000 codes open at once,
+the chance that one IP hits any of them in 10 minutes is about
+100 × 10,000 / 2^40 ≈ 1 in a million (1,000 IPs: about 1 in a thousand per
+10 minutes of sustained effort). A hit would sign that someone else's pending
+device into the guesser's account (its owner would see "Synced as <their
+email>" in the pane, and the device would show in the guesser's device list);
+it never gives access to the victim's account. The limiter is per Cloudflare location and eventually
+consistent, so treat 10/min as approximate; the margin is several orders of
+magnitude.
 
 Bearer-authenticated endpoints answer `401 {"error":"unauthorized"}` for a
 missing or unknown token, and `401 {"error":"device_expired","message":...}` for
@@ -108,6 +169,11 @@ deleted daily, which frees room.
 
 ### Rate limiting
 
+`POST /link` (typing a link code) uses a second binding, `CODE_LIMITER`
+(`namespace_id = "1002"`, 10 requests per 60 s), keyed by an HMAC of the client
+IP. It is checked after the CSRF check and before the code lookup, and costs no
+D1 writes. Without the binding code entry is not rate-limited.
+
 `/v1/lists` uses the Workers Rate Limiting binding `LISTS_LIMITER`
 (`[[ratelimits]]` in `wrangler.toml`): 60 requests per 60 s, keyed by device
 id, checked after authentication. It costs no D1 writes. Cloudflare keeps its
@@ -164,6 +230,10 @@ verified. Emails are compared lower-cased.
 ### Security notes
 
 - Only SHA-256 hashes of poll tokens and device tokens are stored.
+- The link code is typed on `/link`, never carried in a URL; OAuth starts only
+  from `POST /link` behind a `SameSite=Strict` CSRF cookie + HMAC'd hidden field
+  and a per-IP attempt limit (`CODE_LIMITER`). See
+  [Device sign-in](#device-sign-in-typed-code).
 - OAuth uses the authorization-code flow with PKCE (S256) and a state cookie
   (`HttpOnly; Secure; SameSite=Lax; Path=/auth/`, 10 min) HMAC-signed with
   `SESSION_KEY`, carrying the link code, provider, nonce (= `state` param), PKCE
@@ -182,7 +252,7 @@ verified. Emails are compared lower-cased.
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google OAuth client (type "Web application"). |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub OAuth App. |
 | `ACCOUNT_HASH_KEY` | HMAC key for hashing Claude account ids (`<accountUuid>.<orgUuid>`) in `/v1/lists`. **Never rotate once lists are stored**: their keys derive from it. Without it `/v1/lists` answers `503 not_configured`. |
-| `SESSION_KEY` | HMAC key for the state cookie and the rate-limit IP hash. Rotating it only invalidates sign-ins in progress. |
+| `SESSION_KEY` | HMAC key for the state cookie, the sign-in page's CSRF field and the rate-limit IP hash. Rotating it only invalidates sign-ins in progress. |
 
 Generate the two keys with e.g. `openssl rand -base64 32`. A provider whose
 client id/secret (or `SESSION_KEY`) is missing shows as "not configured" on the
@@ -215,7 +285,7 @@ bun run dev                        # http://localhost:8787
 ```
 
 Try it: `curl -X POST localhost:8787/v1/link/start -d '{"deviceName":"test"}'`,
-open the returned `url`, sign in, then
+open the returned `url` (`http://localhost:8787/link`), type the returned `code`, sign in, then
 `curl -X POST localhost:8787/v1/link/poll -d '{"pollToken":"..."}'`.
 
 Checks:
@@ -243,8 +313,8 @@ bunx wrangler secret put SESSION_KEY
 bun run deploy
 ```
 
-Then register the production redirect URIs above and open
-`<PUBLIC_URL>/link?code=...` from a real `POST /v1/link/start` to verify.
+Then register the production redirect URIs above, do a real `POST /v1/link/start`,
+open `<PUBLIC_URL>/link` and type the code to verify.
 
 ### Upgrading an existing deployment
 
@@ -256,5 +326,6 @@ bun run db:migrate:remote   # applies any pending migrations, e.g. 0002_lists_sy
 bun run deploy
 ```
 
-The `[[ratelimits]]` binding's `namespace_id` (`1001`) must be unique within
-your Cloudflare account; change it if it clashes with another Worker's.
+The `[[ratelimits]]` bindings' `namespace_id`s (`1001` for `LISTS_LIMITER`,
+`1002` for `CODE_LIMITER`) must be unique within your Cloudflare account; change
+them if they clash with another Worker's.

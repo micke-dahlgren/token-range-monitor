@@ -30,7 +30,8 @@ export type Palettes = { dark: Palette; light: Palette; own: 'dark' | 'light' }
 /**
  * What the pane's "Sync across devices" row shows: off (the person turned nonessential traffic off), signed out,
  * waiting for a sign-in in the browser (its code and page), or signed in (as whom, when it last synced);
- * a quiet note for what went wrong, and whether a delete is waiting for its confirming press.
+ * a quiet note for what went wrong, whether a delete is waiting for its confirming press, and the devices signed in
+ * (with the one a "Remove" waits on).
  */
 export type RangeSync = {
   status: 'off' | 'signedOut' | 'waiting' | 'signedIn'
@@ -41,7 +42,14 @@ export type RangeSync = {
   note?: string
   confirmDelete?: boolean
   busy?: boolean
+  /** The signed-in account's devices, as the server last listed them (this device first). */
+  devices?: RangeDevice[]
+  /** The device a "Remove" is waiting on its confirming press for. */
+  confirmRemove?: string
 }
+
+/** A device signed in to sync, as the pane lists it: the server's id, its name (null: none given), when it was last seen, whether it is this one. */
+export type RangeDevice = { id: string; name: string | null; lastSeenAt?: number; current: boolean }
 
 declare module 'claude-code' {
   interface PluginState {

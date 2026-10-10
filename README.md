@@ -75,7 +75,7 @@ Each model is judged on its own. Its cost shows once the 90% range of its weight
 
 If you use Claude Code on more than one computer, each one only sees the usage it recorded itself; what you did elsewhere shows up as a jump marked "used while away". Sync lets every device see the others' record, so averages, charts, Last window and model costs cover all of your usage. It's off until you sign in.
 
-**Sign in:** at the bottom of the pane, press **Sync across devices · Sign in**. The pane shows a link and a code like `ABCD-EFGH`. Open the link (in a terminal, copy it if it isn't clickable), check that the page shows the same code, and sign in with Google or GitHub. The pane notices within a few seconds and switches to **Synced as you@example.com · last sync 3 min ago**. Do the same on each device, with the same Google or GitHub account (or one with the same verified email).
+**Sign in:** at the bottom of the pane, press **Sync across devices · Sign in**. The pane shows a code like `ABCD-EFGH` and a link to the sign-in page. Open the page (in a terminal, copy the address if it isn't clickable), type the code shown in the pane, and choose **Continue with Google** or **Continue with GitHub**. The pane notices within a few seconds and switches to **Synced as you@example.com · last sync 3 min ago**. Do the same on each device, with the same Google or GitHub account (or one with the same verified email). The code is never part of the link: only type a code you got from your own Claude Code, never one someone sent you.
 
 While signed in, each device uploads what it recorded every 10 minutes (only when something changed) and when a session ends, and downloads what the other devices uploaded. Synced data is kept per Claude account, as the local record is, so switching Claude accounts switches the synced record too. If the server can't be reached, the mod carries on with what it has and tries again later; a short note on the row says so.
 
@@ -84,6 +84,8 @@ While signed in, each device uploads what it recorded every 10 minutes (only whe
 **Where:** a small server on Cloudflare (Workers and D1) at `https://token-range-monitor.micke-dahlgren.workers.dev`. Its privacy policy is at [token-range-monitor.micke-dahlgren.workers.dev/privacy](https://token-range-monitor.micke-dahlgren.workers.dev/privacy).
 
 **How long:** each day's list is deleted 15 days after it was last updated, which is also how far back the mod looks (it learns model costs from the last 14 days). A device unused for 90 days is signed out and removed.
+
+**Your devices:** while signed in, the row lists every device linked to your sync account, this one first (**this device**), each other one with when it was last seen. If you see one you don't recognize, press **Remove** next to it, then press again to confirm: it is signed out at once, and the lists it uploaded are deleted from the server and from this computer's view. The list updates when you open the pane and after each sync. Each device sends its computer's name; a device the server has no name for gets one the next time it starts.
 
 **Sign out or delete:** **Sign out** on the row unlinks this device and removes the other devices' data from this computer; your own record stays. **Delete synced data** (press twice to confirm) deletes your sync account with everything stored on the server and signs this device out. Other devices notice the next time they sync.
 

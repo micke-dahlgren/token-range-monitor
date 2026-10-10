@@ -17,6 +17,7 @@ const FAR: RangeReading[] = [[T0 - 30 * HOUR, 1, 20, weekReset], [T0 - 2 * HOUR,
 const FAR_STEP: RangeStep = [T0 - 2 * HOUR, 'claude-opus-5-5', 'high', 100, 0]
 
 type Req = { method: string; path: string; query: Record<string, string>; body: any; auth: string | undefined }
+type Dev = { id: string; name: string | null; lastSeenAt: number | null; token: string; lists: string[] }
 type Answer = [status: number, body: unknown, headers?: Record<string, string>]
 
 /** The sync server, faked: device links, lists per key with a change counter as the cursor, a page size. */
@@ -27,6 +28,8 @@ class FakeServer {
   page = 10
   polls: string[] = ['pending', 'ok']
   fail: ((r: Req) => Answer | undefined) | undefined
+  /** The account's devices: this one (token `tok`) and the others. */
+  devices: Dev[] = [{ id: 'srv-this', name: 'testbox', lastSeenAt: T0, token: 'tok', lists: [] }]
   constructor(far: Record<string, unknown> = {}) {
     for (const [key, data] of Object.entries(far)) this.lists.set(key, { data, at: this.clock++ })
   }
@@ -35,12 +38,27 @@ class FakeServer {
     this.reqs.push(r)
     const f = this.fail?.(r)
     if (f) return f
-    if (r.path === '/v1/link/start') return [200, { code: 'ABCD-EFGH', url: `${DEFAULT_SERVER}/link?code=ABCD-EFGH`, pollToken: 'pt', expiresIn: 600, interval: 3 }]
+    if (r.path === '/v1/link/start') return [200, { code: 'ABCD-EFGH', url: `${DEFAULT_SERVER}/link`, pollToken: 'pt', expiresIn: 600, interval: 3 }]
     if (r.path === '/v1/link/poll') {
       const s = this.polls.shift() ?? 'pending'
       return [200, s === 'ok' ? { status: 'ok', deviceToken: 'tok', email: 'me@example.com' } : { status: s }]
     }
-    if (r.auth !== 'Bearer tok') return [401, { error: 'unauthorized' }]
+    if (r.auth !== 'Bearer tok' || !this.devices.some(d => d.token === 'tok')) return [401, { error: 'unauthorized' }]
+    if (r.method === 'GET' && r.path === '/v1/me') {
+      return [200, { email: 'me@example.com', providers: ['google'], devices: this.devices.map(d => ({ id: d.id, name: d.name, createdAt: 1, lastSeenAt: d.lastSeenAt, current: d.token === 'tok' })) }]
+    }
+    if (r.method === 'PUT' && r.path === '/v1/device') {
+      this.devices.find(d => d.token === 'tok')!.name = r.body.name
+      return [200, { ok: true, name: r.body.name }]
+    }
+    const rm = /^\/v1\/devices\/(.+)$/.exec(r.path)
+    if (r.method === 'DELETE' && rm) {
+      const d = this.devices.find(x => x.id === decodeURIComponent(rm[1]!))
+      if (!d) return [404, { error: 'not_found' }]
+      this.devices = this.devices.filter(x => x !== d)
+      for (const key of d.lists) this.lists.delete(key)
+      return [200, { ok: true, listsDeleted: d.lists.length }]
+    }
     if (r.method === 'PUT' && r.path === '/v1/lists') {
       for (const l of r.body.lists) this.lists.set(l.key, { data: l.data, at: this.clock++ })
       return [200, { ok: true, stored: r.body.lists.length }]
@@ -60,8 +78,8 @@ class FakeServer {
   }
 }
 
-/** A session on this computer, signed in to Claude as `me.org`; the store and the environment as given. */
-function world(on: On, server: FakeServer, store: Record<string, unknown> = {}, env: Record<string, string> = {}) {
+/** A session on this computer, signed in to Claude as `me.org`; the store and the environment as given; `hostname` prints `testbox`. */
+function world(on: On, server: FakeServer, store: Record<string, unknown> = {}, env: Record<string, string> = {}, host: string | null = 'testbox') {
   mock.store(on, { [`${ME}/r:local`]: LOCAL, 'sync:device': 'dev1abc', ...store })
   mock.env(on, { HOME: '/home/t', ...env })
   const clock = mock.clock(on, { now: T0 })
@@ -75,6 +93,12 @@ function world(on: On, server: FakeServer, store: Record<string, unknown> = {}, 
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  // the host command for the computer's name (CLI only): `null` stands for a surface that can't run one
+  on('process.run', (_$, e) => {
+    if (host === null) throw new Error('no process here')
+    expect(e.argv).toEqual(['hostname'])
+    return { value: { exitCode: 0, stdout: `${host}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
   on('http.fetch', (_$, e) => {
     expect(e.url.startsWith(DEFAULT_SERVER)).toBe(true)
     const [path = '', qs = ''] = e.url.slice(DEFAULT_SERVER.length).split('?')
@@ -117,13 +141,15 @@ test("signed in: this computer's lists go up as one list per day, another device
   expect(await pane.find({ type: 'Text', text: /last sync just now/ })).toBeDefined()
 
   // two lists on the server (the other device's, and this one's just sent), one per page: the second asked for at once with the cursor
-  const gets = server.reqs.filter(r => r.method === 'GET')
+  const gets = server.reqs.filter(r => r.method === 'GET' && r.path === '/v1/lists')
   expect(gets.map(r => r.query.since)).toEqual([undefined, '1'])
+  // and after the sync, the device list
+  expect(server.reqs.at(-1)).toMatchObject({ method: 'GET', path: '/v1/me' })
 
   // ten minutes on, nothing changed here: no upload, one download from the last cursor
   await clock.advance(10 * MIN)
   expect(server.count('PUT', '/v1/lists')).toBe(1)
-  expect(server.reqs.filter(r => r.method === 'GET').at(-1)!.query.since).toBe('2')
+  expect(server.reqs.filter(r => r.method === 'GET' && r.path === '/v1/lists').at(-1)!.query.since).toBe('2')
   expect(await pane.find({ type: 'Text', text: /last sync just now/ })).toBeDefined()
 
   // a new reading here: the next sync sends today's list again, now holding it; the other device's never
@@ -200,8 +226,8 @@ test('a busy or unreachable server is asked again later and later; the record go
   await clock.advance(9 * MIN)
   expect(server.reqs).toHaveLength(3)
   await clock.advance(MIN)
-  // each failed try was an upload; this one went through, then the download
-  expect(server.reqs.map(r => r.method)).toEqual(['PUT', 'PUT', 'PUT', 'PUT', 'GET'])
+  // each failed try was an upload; this one went through, then the download, then the device list
+  expect(server.reqs.map(r => `${r.method} ${r.path}`)).toEqual(['PUT /v1/lists', 'PUT /v1/lists', 'PUT /v1/lists', 'PUT /v1/lists', 'GET /v1/lists', 'GET /v1/me'])
   expect(await pane.find({ type: 'Text', text: /trying again/ })).toBeUndefined()
   await pane.unmount()
 })
@@ -211,7 +237,7 @@ test('a cursor the server cannot read starts the download over', async ($, on) =
   const clock = world(on, server, { 'sync:auth': AUTH, [`sync:acct:${ME}`]: { cursor: 'garbage', sent: {} } })
   await start($)
   await clock.advance(1_000)
-  expect(server.reqs.filter(r => r.method === 'GET').map(r => r.query.since)).toEqual(['garbage', undefined])
+  expect(server.reqs.filter(r => r.method === 'GET' && r.path === '/v1/lists').map(r => r.query.since)).toEqual(['garbage', undefined])
   const pane = await $.ui.mount({
     plugin: 'token-range-monitor', surface: 'terminal', component: 'Pane', requestId: 'token-range-monitor',
     props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
@@ -241,7 +267,7 @@ test('signing in: a code and a page, asked at the interval until it says yes, th
     props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
   })
   await pane.press({ key: 'sync-signin' })
-  expect(server.reqs[0]).toMatchObject({ method: 'POST', path: '/v1/link/start' })
+  expect(server.reqs[0]).toMatchObject({ method: 'POST', path: '/v1/link/start', body: { deviceName: 'testbox' } })
   for (const surface of surfaces) {
     const p = surface === 'terminal' ? pane : await $.ui.mount({
       plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor',
@@ -249,10 +275,12 @@ test('signing in: a code and a page, asked at the interval until it says yes, th
     })
     expect(await p.find({ type: 'Text', text: 'Waiting for sign-in… code ABCD-EFGH' })).toBeDefined()
     expect(await p.find({ key: 'sync-cancel' })).toBeDefined()
-    expect((await p.find({ type: 'Link' }))?.props.href).toBe(`${DEFAULT_SERVER}/link?code=ABCD-EFGH`)
+    // the page's address carries no code: it is typed there
+    expect((await p.find({ type: 'Link' }))?.props.href).toBe(`${DEFAULT_SERVER}/link`)
     expect((await p.find({ type: 'Link' }))?.props.label).toBe('the sign-in page')
-    expect(await p.find({ type: 'Text', text: /check it shows ABCD-EFGH/ })).toBeDefined()
-    expect(await p.find({ type: 'Text', text: `${DEFAULT_SERVER}/link?code=ABCD-EFGH` })).toBeDefined()
+    expect(await p.find({ type: 'Text', text: /and enter the code ABCD-EFGH\./ })).toBeDefined()
+    expect(await p.find({ type: 'Text', text: /check it shows/ })).toBeUndefined()
+    expect(await p.find({ type: 'Text', text: `${DEFAULT_SERVER}/link` })).toBeDefined()
     if (p !== pane) await p.unmount()
   }
 
@@ -356,4 +384,126 @@ test('with nonessential traffic turned off, sync is off and says so', async ($, 
     expect(await pane.find({ key: 'sync-signin' })).toBeUndefined()
     await pane.unmount()
   }
+})
+
+const mountPane = ($: { ui: { mount: (o: never) => Promise<any> } }, surface: 'terminal' | 'desktop') =>
+  $.ui.mount({
+    plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor',
+    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' },
+  } as never)
+
+test('signed in, the pane lists the devices: this one first with no Remove, the others with when they were last seen', async ($, on) => {
+  const server = new FakeServer()
+  server.devices.push(
+    { id: 'srv-laptop', name: 'Work laptop', lastSeenAt: T0 - 3 * MIN, token: 'tok-laptop', lists: [] },
+    { id: 'srv-null', name: null, lastSeenAt: T0 - 2 * DAY, token: 'tok-null', lists: [] },
+  )
+  const clock = world(on, server, { 'sync:auth': AUTH })
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  await start($)
+  await clock.advance(1_000)
+  // asked once after the sync, not on every redraw
+  expect(server.count('GET', '/v1/me')).toBe(1)
+  for (const surface of surfaces) {
+    const p = await mountPane($, surface)
+    expect(await p.find({ type: 'Text', text: 'Linked devices' })).toBeDefined()
+    expect(await p.find({ type: 'Text', text: 'testbox · this device' })).toBeDefined()
+    expect(await p.find({ type: 'Text', text: 'Work laptop · last seen 3 min ago ·' })).toBeDefined()
+    expect(await p.find({ type: 'Text', text: 'Unnamed device · last seen 2 days ago ·' })).toBeDefined()
+    expect((await p.find({ key: 'sync-remove-srv-laptop' }))?.props.label).toBe('Remove')
+    expect(await p.find({ key: 'sync-remove-srv-null' })).toBeDefined()
+    expect(await p.find({ key: 'sync-remove-srv-this' })).toBeUndefined()
+    expect((await p.find({ key: 'sync-signout' }))?.props.label).toBe('Sign out')
+    await p.unmount()
+  }
+  expect(server.count('GET', '/v1/me')).toBe(1)
+  // this device's name already matched: nothing renamed
+  expect(server.count('PUT', '/v1/device')).toBe(0)
+  // opening the pane (Details above the prompt) asks again, but not twice within half a minute
+  const band = await $.ui.mount({ plugin: 'token-range-monitor', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } } as never)
+  await band.press({ key: 'details' })
+  expect(server.count('GET', '/v1/me')).toBe(1)
+  await clock.advance(MIN)
+  await band.press({ key: 'details' })
+  expect(server.count('GET', '/v1/me')).toBe(2)
+  await band.unmount()
+})
+
+test('Remove takes a second press, then removes the device on the server, its lists leave the record, and the list refreshes', async ($, on) => {
+  const server = new FakeServer({ 'd:bad1-20261010': [FAR, [], [FAR_STEP]] })
+  server.devices.push({ id: 'srv-bad', name: 'Stranger', lastSeenAt: T0 - MIN, token: 'tok-bad', lists: ['d:bad1-20261010'] })
+  const clock = world(on, server, { 'sync:auth': AUTH })
+  await start($)
+  await clock.advance(1_000)
+  const pane = await mountPane($, 'terminal')
+  // the unwanted device's week shows here
+  expect(await pane.find({ type: 'Text', text: 'This week' })).toBeDefined()
+
+  await pane.press({ key: 'sync-remove-srv-bad' })
+  expect(server.reqs.some(r => r.method === 'DELETE')).toBe(false)
+  expect((await pane.find({ key: 'sync-remove-srv-bad' }))?.props.label).toBe('Press again to remove Stranger and its synced data')
+  // left alone, it asks again from the start
+  await clock.advance(10_000)
+  expect((await pane.find({ key: 'sync-remove-srv-bad' }))?.props.label).toBe('Remove')
+
+  await pane.press({ key: 'sync-remove-srv-bad' })
+  await pane.press({ key: 'sync-remove-srv-bad' })
+  expect(server.reqs.filter(r => r.method === 'DELETE').map(r => r.path)).toEqual(['/v1/devices/srv-bad'])
+  expect(server.devices.map(d => d.id)).toEqual(['srv-this'])
+  // gone from the list (asked again), and its lists gone from the record: downloaded again from the start
+  expect(server.reqs.at(-1)).toMatchObject({ method: 'GET', path: '/v1/me' })
+  expect(server.reqs.filter(r => r.method === 'GET' && r.path === '/v1/lists').at(-1)!.query.since).toBeUndefined()
+  expect(await pane.find({ key: 'sync-remove-srv-bad' })).toBeUndefined()
+  expect(await pane.find({ type: 'Text', text: /Stranger/ })).toBeUndefined()
+  expect(await pane.find({ type: 'Text', text: 'No weekly limit reported.' })).toBeDefined()
+  // still signed in here
+  expect(await pane.find({ type: 'Text', text: /^Synced as me@example\.com · / })).toBeDefined()
+  await pane.unmount()
+})
+
+test('a device the server has no name for gets this computer\'s, once a session', async ($, on) => {
+  const server = new FakeServer()
+  server.devices[0]!.name = null
+  const clock = world(on, server, { 'sync:auth': AUTH })
+  await start($)
+  await clock.advance(1_000)
+  expect(server.reqs.filter(r => r.method === 'PUT' && r.path === '/v1/device').map(r => r.body)).toEqual([{ name: 'testbox' }])
+  const pane = await mountPane($, 'desktop')
+  expect(await pane.find({ type: 'Text', text: 'testbox · this device' })).toBeDefined()
+  await pane.unmount()
+  // renamed elsewhere since: this session doesn't ask again
+  server.devices[0]!.name = null
+  await clock.advance(10 * MIN)
+  expect(server.count('PUT', '/v1/device')).toBe(1)
+})
+
+test('where no host command runs, the environment says the platform and a generic name fills a missing one only', async ($, on) => {
+  const server = new FakeServer()
+  server.devices[0]!.name = null
+  const clock = world(on, server, { 'sync:auth': AUTH }, { __CF_USER_TEXT_ENCODING: '0x1F5:0:0' }, null)
+  await start($)
+  await clock.advance(1_000)
+  expect(server.reqs.filter(r => r.method === 'PUT' && r.path === '/v1/device').map(r => r.body)).toEqual([{ name: 'Mac' }])
+})
+
+test('a generic name never replaces a real one', async ($, on) => {
+  const server = new FakeServer()
+  server.devices[0]!.name = "Micke's MacBook"
+  const clock = world(on, server, { 'sync:auth': AUTH }, { __CF_USER_TEXT_ENCODING: '0x1F5:0:0' }, null)
+  await start($)
+  await clock.advance(1_000)
+  expect(server.count('PUT', '/v1/device')).toBe(0)
+})
+
+test('COMPUTERNAME is sent at sign-in and replaces another name', async ($, on) => {
+  const server = new FakeServer()
+  server.devices[0]!.name = 'old-name'
+  const clock = world(on, server, {}, { COMPUTERNAME: 'GAMER-PC', OS: 'Windows_NT' }, null)
+  await start($)
+  const pane = await mountPane($, 'terminal')
+  await pane.press({ key: 'sync-signin' })
+  expect(server.reqs[0]).toMatchObject({ path: '/v1/link/start', body: { deviceName: 'GAMER-PC' } })
+  await clock.advance(6_000)
+  expect(server.reqs.filter(r => r.method === 'PUT' && r.path === '/v1/device').map(r => r.body)).toEqual([{ name: 'GAMER-PC' }])
+  await pane.unmount()
 })

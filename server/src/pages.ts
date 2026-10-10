@@ -17,10 +17,13 @@ h1{font-size:1.25rem;margin:0 0 8px}
 h2{font-size:1rem;margin:20px 0 4px}
 p,li{color:var(--muted);margin:0 0 12px}
 a{color:var(--accent)}
-.code{font:600 1.9rem/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.12em;text-align:center;padding:14px;margin:16px 0;border:1px dashed var(--border);border-radius:10px;color:var(--text)}
-.btn{display:block;text-align:center;text-decoration:none;color:var(--text);background:var(--btn);border:1px solid var(--border);border-radius:10px;padding:12px;margin:10px 0;font-weight:600}
+label{display:block;color:var(--text);font-weight:600;margin:16px 0 6px}
+.code{display:block;width:100%;font:600 1.6rem/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.12em;text-align:center;text-transform:uppercase;padding:12px;margin:0 0 12px;border:1px solid var(--border);border-radius:10px;color:var(--text);background:var(--bg)}
+.code:focus{outline:2px solid var(--accent);outline-offset:1px}
+.btn{display:block;width:100%;text-align:center;text-decoration:none;color:var(--text);background:var(--btn);border:1px solid var(--border);border-radius:10px;padding:12px;margin:10px 0;font:inherit;font-weight:600;cursor:pointer}
 .btn:hover{background:var(--btn-hover)}
-.btn.off{opacity:.45;pointer-events:none}
+.btn:disabled{opacity:.45;cursor:default;background:var(--btn)}
+.err{color:var(--accent);font-weight:600}
 .small{font-size:.85rem}
 .ok{color:var(--text)}
 `
@@ -32,16 +35,30 @@ function layout(title: string, body: string, wide = false): string {
 <body><main${wide ? ' class="wide"' : ''}>${body}</main></body></html>`
 }
 
-export function linkPage(displayCode: string, enabled: { google: boolean; github: boolean }): string {
-  const q = `?code=${encodeURIComponent(displayCode)}`
-  const btn = (href: string, label: string, on: boolean) => `<a class="btn${on ? '' : ' off'}" href="${on ? escapeHtml(href) : '#'}">${label}${on ? '' : ' (not configured)'}</a>`
+export interface LinkPageOptions {
+  /** hidden CSRF field value */
+  csrf: string
+  enabled: { google: boolean; github: boolean }
+  /** shown above the form after a failed attempt */
+  error?: string
+  /** what the user typed, put back after a failed attempt (never taken from a URL) */
+  code?: string
+}
+
+/** The code-entry form: the user types the code shown in Claude Code, then picks a provider. */
+export function linkPage({ csrf, enabled, error, code }: LinkPageOptions): string {
+  const btn = (provider: string, label: string, on: boolean) =>
+    `<button class="btn" type="submit" name="provider" value="${provider}"${on ? '' : ' disabled'}>${label}${on ? '' : ' (not configured)'}</button>`
   return layout(
     'Link device',
     `<h1>Link Claude Code to your account</h1>
-<p>Check that this code matches the one shown in Claude Code:</p>
-<div class="code">${escapeHtml(displayCode)}</div>
-${btn(`/auth/google/start${q}`, 'Continue with Google', enabled.google)}
-${btn(`/auth/github/start${q}`, 'Continue with GitHub', enabled.github)}
+${error ? `<p class="err" role="alert">${escapeHtml(error)}</p>` : ''}<form method="post" action="/link">
+<input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+<label for="code">Enter the code shown in Claude Code</label>
+<input class="code" id="code" name="code" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="16" placeholder="XXXX-XXXX" required autofocus value="${escapeHtml(code ?? '')}">
+${btn('google', 'Continue with Google', enabled.google)}
+${btn('github', 'Continue with GitHub', enabled.github)}
+</form>
 <p class="small">Only continue if you started this from your own Claude Code. Signing in links that install to your account so your Token Range Monitor history syncs across devices. <a href="/privacy">Privacy</a></p>`,
   )
 }

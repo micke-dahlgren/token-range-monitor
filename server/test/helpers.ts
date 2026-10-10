@@ -67,7 +67,7 @@ export function fakeWorld() {
 export type World = ReturnType<typeof fakeWorld>
 
 let ipCounter = 0
-/** A fresh client IP, so tests don't share the /v1/link/start rate limit. */
+/** A fresh client IP, so tests don't share the /v1/link/start and POST /link rate limits. */
 export const freshIp = () => `10.0.${Math.floor(++ipCounter / 250)}.${ipCounter % 250}`
 
 export function call(world: World, path: string, init: RequestInit = {}): Promise<Response> {
@@ -97,14 +97,38 @@ export async function poll(world: World, pollToken: string): Promise<{ status: s
   return res.json()
 }
 
-/** The browser's start redirect: the state cookie and the state param sent to the provider. */
-export async function beginSignIn(world: World, provider: 'google' | 'github', displayCode: string) {
-  const res = await call(world, `/auth/${provider}/start?code=${displayCode}`)
+/** GET /link as a browser: the CSRF cookie (name=value) and the hidden field. */
+export async function openLinkPage(world: World, query = '') {
+  const res = await call(world, `/link${query}`)
+  expect(res.status).toBe(200)
+  const setCookie = res.headers.get('set-cookie')!
+  const cookie = /^((?:__Host-)?trm_csrf=[^;]+)/.exec(setCookie)![1]!
+  const body = await res.text()
+  const csrf = /name="csrf" value="([^"]+)"/.exec(body)![1]!
+  return { res, body, setCookie, cookie, csrf }
+}
+
+/** POSTs the sign-in form. `cookie: null` sends no cookie; `ip` defaults to a fresh one (own rate-limit bucket). */
+export function submitCode(
+  world: World,
+  fields: { code: string; provider: string; csrf: string },
+  cookie: string | null,
+  ip = freshIp(),
+): Promise<Response> {
+  const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded', 'cf-connecting-ip': ip }
+  if (cookie) headers.cookie = cookie
+  return call(world, '/link', { method: 'POST', headers, body: new URLSearchParams(fields).toString() })
+}
+
+/** The browser's sign-in: open /link, type the code, pick a provider → state cookie and the state param sent to the provider. */
+export async function beginSignIn(world: World, provider: 'google' | 'github', typedCode: string) {
+  const page = await openLinkPage(world)
+  const res = await submitCode(world, { code: typedCode, provider, csrf: page.csrf }, page.cookie)
   expect(res.status).toBe(302)
   const location = new URL(res.headers.get('location')!)
   const setCookie = res.headers.get('set-cookie')!
   const cookie = /^trm_oauth=([^;]+)/.exec(setCookie)![1]!
-  return { location, setCookie, cookie, state: location.searchParams.get('state')! }
+  return { res, location, setCookie, cookie, state: location.searchParams.get('state')! }
 }
 
 /** Starts sign-in and comes back from the provider with `authCode`; returns the callback response. */

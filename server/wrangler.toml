@@ -25,6 +25,14 @@ name = "LISTS_LIMITER"
 namespace_id = "1001"
 simple = { limit = 60, period = 60 }
 
+# Brute-force limit for typing a link code on the sign-in page (POST /link):
+# 10 attempts per 60 s per client IP (keyed by an HMAC of the IP). period must
+# be 10 or 60. namespace_id must be unique within the Cloudflare account.
+[[ratelimits]]
+name = "CODE_LIMITER"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
+
 # Daily housekeeping (UTC): deletes expired link codes, lists not updated for
 # 22 days and devices unused for 90 days.
 [triggers]

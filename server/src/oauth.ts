@@ -1,5 +1,5 @@
 /** Google and GitHub sign-in (authorization code flow with PKCE) for the device-link page. */
-import { normalizeCode, randomToken, sha256B64url, signValue, verifyValue } from './crypto'
+import { randomToken, sha256B64url, signValue, verifyValue } from './crypto'
 import { resolveUser, userEmail, type Provider, type ProviderProfile } from './db'
 import type { Deps, Env } from './env'
 import { publicUrl } from './env'
@@ -45,20 +45,31 @@ const PROVIDERS = {
   },
 } as const
 
+export const isProvider = (v: unknown): v is Provider => v === 'google' || v === 'github'
+
+/**
+ * Origins the sign-in form's POST may redirect to. Browsers apply the page's
+ * CSP `form-action` to redirects that follow a form submission, so the link
+ * page must allow these besides 'self'.
+ */
+export const AUTHORIZE_ORIGINS = Object.values(PROVIDERS).map((p) => new URL(p.authorize).origin)
+
 export const providerEnabled = (env: Env, p: Provider) => Boolean(PROVIDERS[p].clientId(env) && PROVIDERS[p].clientSecret(env) && env.SESSION_KEY)
 export const redirectUri = (env: Env, p: Provider) => `${publicUrl(env)}/auth/${p}/callback`
 
 /** A sign-in failure worth showing to the user as is. */
 class AuthError extends Error {}
 
-const notConfigured = (label: string) => html(messagePage('Not available', `${label} sign-in is not configured on this server.`), 503)
+export const notConfigured = (label: string) => html(messagePage('Not available', `${label} sign-in is not configured on this server.`), 503)
 
-export async function startAuth(provider: Provider, req: Request, env: Env, deps: Deps): Promise<Response> {
+/**
+ * Redirects the browser to the provider with a signed state cookie and PKCE.
+ * Only called from the sign-in form (POST /link) after its CSRF check, rate
+ * limit and code lookup have passed: there is no GET route that starts OAuth.
+ */
+export async function beginAuth(provider: Provider, code: string, env: Env, deps: Deps): Promise<Response> {
   const cfg = PROVIDERS[provider]
   if (!providerEnabled(env, provider)) return notConfigured(cfg.label)
-  const code = normalizeCode(new URL(req.url).searchParams.get('code'))
-  if (!code || !(await openCode(env, code, deps.now()))) return html(messagePage('Link expired', INVALID_CODE_TEXT), 400)
-
   const state: OAuthState = { c: code, p: provider, n: randomToken(), v: randomToken(), e: deps.now() + STATE_TTL_MS }
   const cookie = await signValue(env.SESSION_KEY!, state)
   const url = new URL(cfg.authorize)
@@ -82,14 +93,14 @@ export async function callback(provider: Provider, req: Request, env: Env, deps:
   const page = (title: string, text: string, status: number) => html(messagePage(title, text), status, [clearCookie])
 
   const params = new URL(req.url).searchParams
-  if (params.get('error')) return page('Sign-in cancelled', `${cfg.label} sign-in was cancelled. Open the link from Claude Code again to retry.`, 400)
+  if (params.get('error')) return page('Sign-in cancelled', `${cfg.label} sign-in was cancelled. Open the sign-in page from Claude Code again to retry.`, 400)
 
   const raw = getCookie(req, STATE_COOKIE)
   const state = raw ? await verifyValue<OAuthState>(env.SESSION_KEY!, raw) : null
   const now = deps.now()
   const stateParam = params.get('state')
   if (!state || state.p !== provider || !(state.e > now) || !stateParam || stateParam !== state.n || !params.get('code')) {
-    return page('Sign-in failed', 'This sign-in attempt is invalid or has expired. Open the link from Claude Code again.', 400)
+    return page('Sign-in failed', 'This sign-in attempt is invalid or has expired. Open the sign-in page from Claude Code again.', 400)
   }
   if (!(await openCode(env, state.c, now))) return page('Link expired', INVALID_CODE_TEXT, 400)
 

@@ -1,8 +1,9 @@
 import { env } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import { sha256Hex } from '../src/crypto'
-import { purgeExpiredCodes, START_LIMIT } from '../src/link'
-import { authed, call, fakeWorld, freshIp, poll, postJson, signIn, start, uniq } from './helpers'
+import { BAD_CODE_TEXT, CODE_ATTEMPT_LIMIT, purgeExpiredCodes, START_LIMIT } from '../src/link'
+import { handle } from '../src/index'
+import { authed, beginSignIn, call, fakeWorld, freshIp, openLinkPage, poll, postJson, signIn, start, submitCode, uniq } from './helpers'
 
 describe('device link flow', () => {
   it('start → pending → Google sign-in → ok → second poll expired', async () => {
@@ -12,7 +13,8 @@ describe('device link flow', () => {
 
     const s = await start(w, 'Ada’s laptop')
     expect(s.code).toMatch(/^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/)
-    expect(s.url).toBe(`http://localhost:8787/link?code=${s.code}`)
+    // the code is never in the URL: the user types it
+    expect(s.url).toBe('http://localhost:8787/link')
     expect(s.pollToken).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(s.expiresIn).toBe(600)
     expect(s.interval).toBeGreaterThan(0)
@@ -24,10 +26,11 @@ describe('device link flow', () => {
 
     expect(await poll(w, s.pollToken)).toEqual({ status: 'pending' })
 
-    const page = await call(w, `/link?code=${s.code.toLowerCase()}`)
+    const page = await call(w, '/link')
     expect(page.status).toBe(200)
     const body = await page.text()
-    expect(body).toContain(s.code)
+    expect(body).not.toContain(s.code)
+    expect(body).toContain('Enter the code shown in Claude Code')
     expect(body).toContain('Continue with Google')
     expect(body).toContain('Continue with GitHub')
     expect(body).not.toMatch(/<script/i)
@@ -46,9 +49,11 @@ describe('device link flow', () => {
 
     expect(await poll(w, s.pollToken)).toEqual({ status: 'expired' })
 
-    // the code cannot be signed in for again either
-    expect((await call(w, `/link?code=${s.code}`)).status).toBe(400)
-    expect((await call(w, `/auth/google/start?code=${s.code}`)).status).toBe(400)
+    // the code cannot be signed in for again either (claimed)
+    const again = await openLinkPage(w)
+    const res = await submitCode(w, { code: s.code, provider: 'google', csrf: again.csrf }, again.cookie)
+    expect(res.status).toBe(400)
+    expect(await res.text()).toContain('isn&#39;t valid or has expired')
   })
 
   it('sends the provider a PKCE challenge, the scopes and a redirect URI built from PUBLIC_URL', async () => {
@@ -58,8 +63,7 @@ describe('device link flow', () => {
       ['google', 'accounts.google.com', 'openid email profile'],
       ['github', 'github.com', 'read:user user:email'],
     ] as const) {
-      const res = await call(w, `/auth/${provider}/start?code=${s.code}`)
-      expect(res.status).toBe(302)
+      const { res } = await beginSignIn(w, provider, s.code)
       const loc = new URL(res.headers.get('location')!)
       expect(loc.host).toBe(host)
       expect(loc.searchParams.get('redirect_uri')).toBe(`http://localhost:8787/auth/${provider}/callback`)
@@ -91,33 +95,53 @@ describe('device link flow', () => {
     }
   })
 
-  it('expired codes: poll, link page, sign-in start and a late callback all refuse', async () => {
+  it('expired codes: poll, code entry and a late callback all refuse', async () => {
     const w = fakeWorld()
     w.google.set('late', { sub: `g-${uniq()}`, email: `late-${uniq()}@example.com`, email_verified: true })
     const s = await start(w)
     // sign-in begins in time, but the provider round trip ends after expiry
-    const res = await call(w, `/auth/google/start?code=${s.code}`)
-    const state = new URL(res.headers.get('location')!).searchParams.get('state')!
-    const cookie = /^trm_oauth=([^;]+)/.exec(res.headers.get('set-cookie')!)![1]!
+    const { state, cookie } = await beginSignIn(w, 'google', s.code)
     w.advance(11 * 60 * 1000)
 
     expect(await poll(w, s.pollToken)).toEqual({ status: 'expired' })
-    expect((await call(w, `/link?code=${s.code}`)).status).toBe(400)
-    expect(await (await call(w, `/link?code=${s.code}`)).text()).toContain('expired')
-    expect((await call(w, `/auth/google/start?code=${s.code}`)).status).toBe(400)
+    const page = await openLinkPage(w)
+    const res = await submitCode(w, { code: s.code, provider: 'google', csrf: page.csrf }, page.cookie)
+    expect(res.status).toBe(400)
+    expect(res.headers.get('location')).toBeNull()
+    expect(await res.text()).toContain('isn&#39;t valid or has expired')
     const cb = await call(w, `/auth/google/callback?code=late&state=${state}`, { headers: { cookie: `trm_oauth=${cookie}` } })
     expect(cb.status).toBe(400)
     expect(await poll(w, s.pollToken)).toEqual({ status: 'expired' })
   })
 
-  it('unknown and malformed codes get the friendly page', async () => {
+  it('GET /link always shows the empty form and ignores ?code=', async () => {
     const w = fakeWorld()
-    for (const q of ['', '?code=', '?code=ABCD-EFGH', '?code=<script>']) {
+    const s = await start(w)
+    for (const q of ['', '?code=', `?code=${s.code}`, `?code=${s.code.replace('-', '').toLowerCase()}`, '?code=<script>']) {
       const res = await call(w, `/link${q}`)
-      expect(res.status).toBe(400)
+      expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toContain('text/html')
-      expect(await res.text()).toContain('Start linking again')
+      const body = await res.text()
+      expect(body).not.toContain(s.code)
+      expect(body).not.toContain(s.code.replace('-', ''))
+      expect(body).not.toContain(s.code.replace('-', '').toLowerCase())
+      expect(body).not.toContain('<script')
+      expect(body).toMatch(/<input class="code"[^>]* value="">/)
+      for (const attr of ['autocomplete="one-time-code"', 'autocapitalize="characters"', 'inputmode="text"', 'autofocus', 'method="post"', 'action="/link"']) {
+        expect(body).toContain(attr)
+      }
+      expect(body).toContain('Only continue if you started this from your own Claude Code')
+      expect(body).toContain('href="/privacy"')
     }
+  })
+
+  it('the link page CSP lets the form post to self and redirect to the providers; other pages forbid forms', async () => {
+    const w = fakeWorld()
+    const csp = (await call(w, '/link')).headers.get('content-security-policy')!
+    expect(csp).toContain("form-action 'self' https://accounts.google.com https://github.com")
+    expect(csp).toContain("default-src 'none'")
+    expect(csp).not.toContain('script-src')
+    expect((await call(w, '/privacy')).headers.get('content-security-policy')).toContain("form-action 'none'")
   })
 
   it('unknown poll tokens are expired; a missing one is a 400', async () => {
@@ -155,6 +179,170 @@ describe('device link flow', () => {
     expect(await purgeExpiredCodes(env, Date.now())).toBeGreaterThanOrEqual(1)
     expect(await poll(w, old.pollToken)).toEqual({ status: 'expired' })
     expect(await poll(w, fresh.pollToken)).toEqual({ status: 'pending' })
+  })
+})
+
+describe('sign-in form (typed code + CSRF)', () => {
+  const noStateCookie = (res: Response) => expect(res.headers.get('set-cookie') ?? '').not.toContain('trm_oauth=')
+
+  it('a plain link can no longer start OAuth: /auth/{google,github}/start are 404', async () => {
+    const w = fakeWorld()
+    const s = await start(w)
+    for (const p of ['google', 'github']) {
+      const res = await call(w, `/auth/${p}/start?code=${s.code}`)
+      expect(res.status).toBe(404)
+      noStateCookie(res)
+    }
+    expect(await poll(w, s.pollToken)).toEqual({ status: 'pending' })
+  })
+
+  it('POST /link without the CSRF cookie, with a mismatched or missing field, or a foreign cookie → 403, no state cookie', async () => {
+    const w = fakeWorld()
+    const s = await start(w)
+    const a = await openLinkPage(w)
+    const b = await openLinkPage(w)
+    expect(a.cookie).not.toBe(b.cookie)
+    const fields = { code: s.code, provider: 'google' }
+    for (const res of [
+      await submitCode(w, { ...fields, csrf: a.csrf }, null), // cross-site POST: SameSite=Strict cookie not sent
+      await submitCode(w, { ...fields, csrf: 'forged' }, a.cookie),
+      await submitCode(w, { ...fields, csrf: '' }, a.cookie),
+      await submitCode(w, { ...fields, csrf: b.csrf }, a.cookie), // another session's field
+      await submitCode(w, { ...fields, csrf: a.cookie.split('=')[1]! }, a.cookie), // the raw cookie value is not the field
+      await submitCode(w, { ...fields, csrf: a.csrf }, 'trm_csrf=short'),
+    ]) {
+      expect(res.status).toBe(403)
+      expect(res.headers.get('location')).toBeNull()
+      noStateCookie(res)
+      expect(await res.text()).toContain('This sign-in page expired, please reload')
+    }
+    expect(await poll(w, s.pollToken)).toEqual({ status: 'pending' })
+    // the matching pair works
+    expect((await submitCode(w, { ...fields, csrf: a.csrf }, a.cookie)).status).toBe(302)
+  })
+
+  it('wrong, malformed, expired, claimed and already signed-in codes re-render the form with one error and no redirect', async () => {
+    const w = fakeWorld()
+    w.google.set('si', { sub: `g-${uniq()}`, email: `si-${uniq()}@example.com`, email_verified: true })
+    const claimed = await start(w)
+    await signIn(w, 'google', claimed.code, 'si')
+    expect((await poll(w, claimed.pollToken)).status).toBe('ok')
+    const signedIn = await start(w)
+    w.google.set('si2', { sub: `g-${uniq()}`, email: `si2-${uniq()}@example.com`, email_verified: true })
+    await signIn(w, 'google', signedIn.code, 'si2') // signed in, not yet polled
+    const expired = await start(w)
+    await env.DB.prepare('UPDATE link_codes SET expires_at = ? WHERE code = ?').bind(w.deps.now() - 1, expired.code.replace('-', '')).run()
+
+    const page = await openLinkPage(w)
+    for (const code of ['ABCD-EFGH', '', 'nope', '<b>x</b>', expired.code, claimed.code, signedIn.code]) {
+      for (const provider of ['google', 'github']) {
+        const res = await submitCode(w, { code, provider, csrf: page.csrf }, page.cookie)
+        expect(res.status).toBe(400)
+        expect(res.headers.get('location')).toBeNull()
+        noStateCookie(res)
+        const body = await res.text()
+        expect(body).toContain(BAD_CODE_TEXT.replace("'", '&#39;'))
+        expect(body).not.toContain('<b>x</b>')
+        // the form is still usable: same CSRF field
+        expect(body).toContain(`name="csrf" value="${page.csrf}"`)
+      }
+    }
+  })
+
+  it('an unknown provider re-renders the form', async () => {
+    const w = fakeWorld()
+    const s = await start(w)
+    const page = await openLinkPage(w)
+    const res = await submitCode(w, { code: s.code, provider: 'facebook', csrf: page.csrf }, page.cookie)
+    expect(res.status).toBe(400)
+    noStateCookie(res)
+  })
+
+  it('accepts the code lower-case, without the dash, or with spaces', async () => {
+    const w = fakeWorld()
+    for (const variant of [(c: string) => c.toLowerCase(), (c: string) => c.replace('-', ''), (c: string) => ` ${c.slice(0, 2)} ${c.slice(2, 4)} ${c.slice(5).toLowerCase()} `]) {
+      for (const provider of ['google', 'github'] as const) {
+        const s = await start(w)
+        const { location, cookie } = await beginSignIn(w, provider, variant(s.code))
+        expect(location.host).toBe(provider === 'google' ? 'accounts.google.com' : 'github.com')
+        expect(cookie).toBeTruthy()
+      }
+    }
+  })
+
+  it('valid code + GitHub: redirect with state cookie, then callback → poll ok', async () => {
+    const w = fakeWorld()
+    const email = `gh-${uniq()}@example.com`
+    w.github.set('gh-e2e', { id: Math.floor(Math.random() * 1e9), emails: [{ email, primary: true, verified: true }] })
+    const s = await start(w)
+    const res = await signIn(w, 'github', s.code, 'gh-e2e')
+    expect(res.status).toBe(200)
+    expect(await poll(w, s.pollToken)).toMatchObject({ status: 'ok', email })
+  })
+
+  it('rate-limits code entry per IP (CODE_LIMITER) with 429, before looking the code up', async () => {
+    const w = fakeWorld()
+    const s = await start(w)
+    const page = await openLinkPage(w)
+    const ip = freshIp()
+    let limited: Response | null = null
+    let attempts = 0
+    // the limiter uses fixed real-time windows: if a boundary passes mid-loop, up to 2× the limit may pass
+    for (let i = 0; i < 3 * CODE_ATTEMPT_LIMIT + 2 && !limited; i++) {
+      const res = await submitCode(w, { code: 'ZZZZ-ZZZZ', provider: 'google', csrf: page.csrf }, page.cookie, ip)
+      attempts++
+      if (res.status === 429) limited = res
+      else expect(res.status).toBe(400)
+    }
+    expect(limited).not.toBeNull()
+    expect(attempts).toBeGreaterThan(CODE_ATTEMPT_LIMIT)
+    expect(limited!.headers.get('retry-after')).toBe('60')
+    expect(await limited!.text()).toContain('Too many attempts, wait a minute.')
+    // even the right code is refused from that IP now; another IP is unaffected
+    const blocked = await submitCode(w, { code: s.code, provider: 'google', csrf: page.csrf }, page.cookie, ip)
+    expect(blocked.status).toBe(429)
+    noStateCookie(blocked)
+    expect((await submitCode(w, { code: s.code, provider: 'google', csrf: page.csrf }, page.cookie, freshIp())).status).toBe(302)
+  })
+
+  it('CSRF cookie: dev (http) is trm_csrf without Secure; https is __Host- with Secure; both HttpOnly, SameSite=Strict, Path=/, 15 min', async () => {
+    const w = fakeWorld()
+    const dev = await openLinkPage(w)
+    expect(dev.setCookie).toMatch(/^trm_csrf=[A-Za-z0-9_-]{43}; /)
+    for (const attr of ['Path=/;', 'HttpOnly', 'SameSite=Strict', 'Max-Age=900']) expect(dev.setCookie).toContain(attr)
+    expect(dev.setCookie).not.toContain('Secure')
+    expect(dev.setCookie).not.toContain('Domain')
+
+    const prodEnv = { ...env, PUBLIC_URL: 'https://trm.example.workers.dev' }
+    const res = await handle(new Request('https://trm.example.workers.dev/link'), prodEnv, w.deps)
+    const sc = res.headers.get('set-cookie')!
+    expect(sc).toMatch(/^__Host-trm_csrf=[A-Za-z0-9_-]{43}; /)
+    for (const attr of ['Path=/;', 'HttpOnly', 'Secure', 'SameSite=Strict', 'Max-Age=900']) expect(sc).toContain(attr)
+    expect(sc).not.toContain('Domain')
+    // the prod flow works with the prefixed cookie, and ignores an unprefixed one
+    const s = await start(w)
+    const csrf = /name="csrf" value="([^"]+)"/.exec(await res.text())![1]!
+    const token = /^__Host-trm_csrf=([^;]+)/.exec(sc)![1]!
+    const post = (cookie: string) =>
+      handle(
+        new Request('https://trm.example.workers.dev/link', {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded', cookie, 'cf-connecting-ip': freshIp() },
+          body: new URLSearchParams({ code: s.code, provider: 'google', csrf }).toString(),
+        }),
+        prodEnv,
+        w.deps,
+      )
+    expect((await post(`trm_csrf=${token}`)).status).toBe(403)
+    expect((await post(`__Host-trm_csrf=${token}`)).status).toBe(302)
+  })
+
+  it('reloading the page keeps an existing CSRF token, so several tabs stay valid', async () => {
+    const w = fakeWorld()
+    const first = await openLinkPage(w)
+    const again = await call(w, '/link', { headers: { cookie: first.cookie } })
+    expect(again.headers.get('set-cookie')!.startsWith(`${first.cookie};`)).toBe(true)
+    expect(await again.text()).toContain(`name="csrf" value="${first.csrf}"`)
   })
 })
 

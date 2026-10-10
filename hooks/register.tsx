@@ -10,8 +10,11 @@ import {
 import type { Average, LastWindow, Model } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
 import { baselineOf, learn, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
-import { agoText, cancelSignIn, configureSync, DEVICE_KEY, deleteSynced, downloadedFor, endSync, isDeviceId, signIn, signOut, startSync, syncTick } from './sync'
-import type { Lists, SyncIO } from './sync'
+import {
+  agoText, cancelSignIn, cleanName, configureSync, DEVICE_KEY, DEVICES_FRESH, deleteSynced, deviceLabel, downloadedFor, endSync, GENERIC_NAMES, isDeviceId,
+  NAME_KEY, platformOf, refreshDevices, removeDevice, signIn, signOut, startSync, syncTick,
+} from './sync'
+import type { Lists, Platform, SyncIO } from './sync'
 
 const PANE = 'token-range-monitor'
 const TITLE = 'Token Range Monitor'
@@ -170,6 +173,46 @@ async function peekDevice($: EngineInterface): Promise<string | undefined> {
   return undefined
 }
 
+/**
+ * The computer's own name, for the server's device list: the environment's
+ * (COMPUTERNAME on Windows, HOSTNAME where the shell exports it), else a host
+ * command's where one can run (`scutil --get ComputerName` on macOS, `hostname`
+ * elsewhere; CLI only, kept in the store for sessions that can't run one),
+ * else a generic name for the platform ("Mac", "Windows PC", "Linux computer").
+ */
+async function hostName($: EngineInterface): Promise<string> {
+  const fromEnv = cleanName(await $.env.get('COMPUTERNAME').catch(() => undefined)) ?? cleanName(await $.env.get('HOSTNAME').catch(() => undefined))
+  if (fromEnv) return fromEnv
+  const platform = platformOf({
+    os: await $.env.get('OS').catch(() => undefined),
+    cfEncoding: await $.env.get('__CF_USER_TEXT_ENCODING').catch(() => undefined),
+    home: await $.env.get('HOME').catch(() => undefined),
+  })
+  const found = await commandName($, platform)
+  if (found) {
+    await $.store.set(NAME_KEY, found).catch(() => undefined)
+    return found
+  }
+  return cleanName(await $.store.get(NAME_KEY).catch(() => undefined)) ?? GENERIC_NAMES[platform]
+}
+
+/** The name a host command prints, or null: no command runs here (the desktop), it failed, or it took over 3 s. */
+async function commandName($: EngineInterface, platform: Platform): Promise<string | null> {
+  if (platform === 'windows') return null
+  try {
+    const r = await $.process.run(platform === 'mac' ? ['scutil', '--get', 'ComputerName'] : ['hostname'], { timeoutMs: 3_000 })
+    return r.exitCode === 0 ? cleanName(r.stdout.split('\n')[0]) : null
+  } catch {
+    return null
+  }
+}
+
+/** Opens the pane, and asks for the device list if it wasn't asked for just now. */
+async function openPane($: EngineInterface) {
+  await $.ui.open({ id: PANE, title: TITLE })
+  void refreshDevices(syncIO($), DEVICES_FRESH).catch(() => undefined)
+}
+
 /** What sync reaches through the engine: every call on `$` spelled here, in the hooks module. */
 function syncIO($: EngineInterface): SyncIO {
   return {
@@ -180,7 +223,7 @@ function syncIO($: EngineInterface): SyncIO {
     del: key => $.store.delete(key),
     keys: () => $.store.keys(),
     trafficOff: () => $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'),
-    hostName: async () => (await $.env.get('COMPUTERNAME')) ?? (await $.env.get('HOSTNAME')),
+    hostName: () => hostName($),
     every: (ms, fn) => $.clock.every(ms, fn),
     after: (ms, fn) => $.clock.after(ms, fn),
     log: (text, options) => $.ui.log(text, options),
@@ -417,7 +460,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'token-range' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
-    await $.ui.open({ id: PANE, title: TITLE })
+    await openPane($)
     if (!arg) return { text: 'Token Range Monitor opened.' }
     if (arg === 'reset' || arg === 'since reset') {
       await choose($, { mode: 'reset' })
@@ -455,7 +498,7 @@ export const register: Register = (on, options) => {
             <Button key="reset-five" plain dimColor label={resetsIn(five, s.fine)} onPress={() => toggleFine($)} />
           </Box>
         )}
-        <Button key="details" label="Details" onPress={() => void $.ui.open({ id: PANE, title: TITLE })} />
+        <Button key="details" label="Details" onPress={() => void openPane($)} />
       </Box>
     )
   })
@@ -632,11 +675,30 @@ export const register: Register = (on, options) => {
                     ...(v.status === 'off' ? [] : [<Button key="sync-signin" label="Sign in" dimColor={!!v.busy} onPress={() => void signIn(syncIO($))} />]),
                   ]}
           </Box>
-          {/* the page to sign in on, as a link and as text to copy: it shows the same code */}
+          {/* the devices signed in to this account, this one first: any other one can be removed */}
+          {v.status === 'signedIn' && v.devices && v.devices.length > 0 && (
+            <Box key="devices" flexDirection="column">
+              <Text key="devices-title" color="inactive">Linked devices</Text>
+              {v.devices.map(d => (
+                <Box key={`device-${d.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
+                  {d.current
+                    ? [<Text key="name">{`${deviceLabel(d)} · this device`}</Text>]
+                    : [
+                        <Text key="name">{`${deviceLabel(d)} · last seen ${d.lastSeenAt === undefined ? 'never' : agoText(d.lastSeenAt, now)} ·`}</Text>,
+                        <Button key={`sync-remove-${d.id}`}
+                          label={v.confirmRemove === d.id ? `Press again to remove ${deviceLabel(d)} and its synced data` : 'Remove'}
+                          variant={v.confirmRemove === d.id ? 'primary' : 'secondary'} dimColor={!!v.busy}
+                          onPress={() => void removeDevice(syncIO($), d.id)} />,
+                      ]}
+                </Box>
+              ))}
+            </Box>
+          )}
+          {/* the page to sign in on, where the code is typed: as a link, and as text to copy */}
           {v.status === 'waiting' && v.url && (
             <Box flexDirection="column">
               {/* the link inside a Text, as the inline element it is; the address again as plain text to copy */}
-              <Text>Open <Link href={v.url} label="the sign-in page" /> and check it shows {v.code ?? 'the same code'}.</Text>
+              <Text>Open <Link href={v.url} label="the sign-in page" /> and enter the code {v.code ?? 'shown above'}.</Text>
               <Text dimColor>{v.url}</Text>
             </Box>
           )}

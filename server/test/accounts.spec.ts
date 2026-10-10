@@ -148,7 +148,7 @@ describe('device API', () => {
     expect(res.status).toBe(200)
     type Me = { devices: Array<{ id: string; name: string; lastSeenAt: number; current: boolean }> }
     // within the hour: not rewritten (saves D1 writes)
-    expect((await res.json<Me>()).devices).toEqual([{ id: expect.any(String), name: 'box', lastSeenAt: linkedAt, current: true }])
+    expect((await res.json<Me>()).devices).toEqual([{ id: expect.any(String), name: 'box', createdAt: linkedAt, lastSeenAt: linkedAt, current: true }])
     w.advance(60 * 60 * 1000)
     const later = await (await authed(w, '/v1/me', t)).json<Me>()
     expect(later.devices[0]!.lastSeenAt).toBe(w.deps.now())
@@ -168,6 +168,109 @@ describe('device API', () => {
     expect((await authed(w, '/v1/me', t1)).status).toBe(401)
     const me = await (await authed(w, '/v1/me', t2)).json<{ devices: Array<{ name: string }> }>()
     expect(me.devices.map((d) => d.name)).toEqual(['two'])
+  })
+
+  /** Two devices of one user, plus a third device of another user. */
+  async function threeDevices() {
+    const w = fakeWorld()
+    const sub = `g-${uniq()}`
+    const email = `dl-${uniq()}@example.com`
+    w.google.set('a', { sub, email, email_verified: true })
+    w.google.set('b', { sub, email, email_verified: true })
+    w.google.set('x', { sub: `g-${uniq()}`, email: `x-${uniq()}@example.com`, email_verified: true })
+    const t1 = await linkDevice(w, 'google', 'a', 'mine')
+    w.advance(1000)
+    const t2 = await linkDevice(w, 'google', 'b', 'unexpected')
+    const tx = await linkDevice(w, 'google', 'x', 'stranger')
+    type Me = { devices: Array<{ id: string; name: string | null; createdAt: number; lastSeenAt: number | null; current: boolean }> }
+    const me = async (t: string) => (await authed(w, '/v1/me', t)).json<Me>()
+    const putList = (t: string, key: string) =>
+      call(w, '/v1/lists', {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ account: 'acct.org', lists: [{ key, data: [[], [], []] }] }),
+      })
+    return { w, t1, t2, tx, me, putList }
+  }
+
+  it('GET /v1/me lists all the user\'s devices with createdAt and current', async () => {
+    const { t1, t2, me } = await threeDevices()
+    const a = await me(t1)
+    expect(a.devices.map((d) => [d.name, d.current])).toEqual([
+      ['mine', true],
+      ['unexpected', false],
+    ])
+    for (const d of a.devices) {
+      expect(typeof d.createdAt).toBe('number')
+      expect(typeof d.lastSeenAt).toBe('number')
+    }
+    expect(a.devices[0]!.createdAt).toBeLessThan(a.devices[1]!.createdAt)
+    expect((await me(t2)).devices.map((d) => d.current)).toEqual([false, true])
+  })
+
+  it('DELETE /v1/devices/:id removes another device: its token is 401 and its lists are gone; the caller\'s lists stay', async () => {
+    const { w, t1, t2, me, putList } = await threeDevices()
+    expect((await putList(t1, 'd:mine-20261010')).status).toBe(200)
+    expect((await putList(t2, 'd:bad-20261010')).status).toBe(200)
+    const other = (await me(t1)).devices.find((d) => !d.current)!
+
+    const res = await authed(w, `/v1/devices/${other.id}`, t1, 'DELETE')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, listsDeleted: 1 })
+    expect((await authed(w, '/v1/me', t2)).status).toBe(401)
+    expect((await me(t1)).devices.map((d) => d.name)).toEqual(['mine'])
+    const got = await (await authed(w, '/v1/lists?account=acct.org', t1)).json<{ lists: Array<{ key: string }> }>()
+    expect(got.lists.map((l) => l.key)).toEqual(['d:mine-20261010'])
+    // gone: a second delete is 404
+    expect((await authed(w, `/v1/devices/${other.id}`, t1, 'DELETE')).status).toBe(404)
+  })
+
+  it('DELETE /v1/devices/:id cannot touch another user\'s device (same 404 as an unknown id)', async () => {
+    const { w, t1, tx, me, putList } = await threeDevices()
+    expect((await putList(tx, 'd:x-20261010')).status).toBe(200)
+    const stranger = (await me(tx)).devices[0]!
+    const theirs = await authed(w, `/v1/devices/${stranger.id}`, t1, 'DELETE')
+    const unknown = await authed(w, `/v1/devices/${crypto.randomUUID()}`, t1, 'DELETE')
+    for (const res of [theirs, unknown]) {
+      expect(res.status).toBe(404)
+      expect(await res.json()).toEqual({ error: 'not_found' })
+    }
+    expect((await authed(w, '/v1/me', tx)).status).toBe(200)
+    expect((await (await authed(w, '/v1/lists?account=acct.org', tx)).json<{ lists: unknown[] }>()).lists).toHaveLength(1)
+    // also needs a valid token, and only DELETE is allowed
+    expect((await call(w, `/v1/devices/${stranger.id}`, { method: 'DELETE' })).status).toBe(401)
+    expect((await authed(w, `/v1/devices/${stranger.id}`, t1, 'GET')).status).toBe(405)
+  })
+
+  it('DELETE /v1/devices/<own id> signs this device out like DELETE /v1/device (its lists stay)', async () => {
+    const { w, t1, t2, me, putList } = await threeDevices()
+    expect((await putList(t1, 'd:mine-20261010')).status).toBe(200)
+    const own = (await me(t1)).devices.find((d) => d.current)!
+    const res = await authed(w, `/v1/devices/${own.id}`, t1, 'DELETE')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+    expect((await authed(w, '/v1/me', t1)).status).toBe(401)
+    expect((await (await authed(w, '/v1/lists?account=acct.org', t2)).json<{ lists: unknown[] }>()).lists).toHaveLength(1)
+  })
+
+  it('PUT /v1/device sets the calling device\'s name (trimmed, control chars stripped, 1–64 chars)', async () => {
+    const { w, t1, t2, me } = await threeDevices()
+    const rename = (t: string, body: unknown) =>
+      call(w, '/v1/device', { method: 'PUT', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+    const ok = await rename(t1, { name: '  Micke\u0007’s\nMacBook  ' })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ ok: true, name: 'Micke’sMacBook' })
+    expect((await me(t2)).devices.map((d) => d.name)).toEqual(['Micke’sMacBook', 'unexpected'])
+
+    expect((await rename(t1, { name: 'é'.repeat(64) })).status).toBe(200)
+    for (const body of [{}, { name: '' }, { name: '   ' }, { name: '\u0001\u0002' }, { name: 42 }, { name: 'x'.repeat(65) }]) {
+      const res = await rename(t1, body)
+      expect(res.status).toBe(400)
+      expect(await res.json()).toMatchObject({ error: 'invalid_name' })
+    }
+    expect((await me(t1)).devices[0]!.name).toBe('é'.repeat(64))
+    expect((await rename('garbage', { name: 'x' })).status).toBe(401)
   })
 
   it('DELETE /v1/me removes the user, identities, devices and lists', async () => {
