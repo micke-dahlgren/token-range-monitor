@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, paceExplain, paceText, recentPace, increments, isWatched, needsMore, refine, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, increments, lastWindow, lastWindowNote, lastWindowText, isWatched, needsMore, refine, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
 
@@ -156,40 +156,6 @@ test('a chart waits for enough recorded usage, and says how long', async () => {
   expect(chartWait(m, T0 + 4 * HOUR)).toBe(0)
 })
 
-test("the recent pace reads the last hour off the 5-hour figure, at the account's own exchange rate", async () => {
-  const fiveReset = T0 + 3 * HOUR
-  const watched: Array<[number, number]> = [[T0 - 10 * HOUR, T0]]
-  // six hours at 6 five-hour points for each weekly point, then a busy last hour: 12 five-hour points
-  const readings: RangeReading[] = []
-  for (let h = 6; h >= 1; h--) {
-    readings.push([T0 - h * HOUR, 1, 40 + (6 - h), weekReset])
-    readings.push([T0 - h * HOUR, 0, (6 - h) * 6, fiveReset])
-  }
-  readings.push([T0, 1, 47, weekReset], [T0, 0, 42, fiveReset])
-  const week = project(readings, 'week', T0, { type: 'reset' }, watched)!
-  const p = recentPace(readings, week, T0, watched)
-  if (!p.ready) throw new Error(p.why)
-  expect(Math.round(p.ratio * 10) / 10).toBe(6)
-  expect(Math.round(p.recent * 10) / 10).toBe(12)
-  expect(Math.round(p.rate * 10) / 10).toBe(2)
-  // 53% left at 2%/h: 26.5h, well before the reset 3d 17h away
-  expect(paceText(p)).toBe('At this pace, the weekly limit runs out 2d 15h early.')
-  // the head shows it as a fourth figure, its caption ending in the info circle
-  const head = headerDraw(week, 'This week', 700, undefined, '', p)
-  expect(head.svg).toContain('>1hr pace<')
-  expect(head.svg).toContain('>48.0%/day<')
-  expect(head.info).toBeDefined()
-  expect(paceExplain(p)).toBe('In the last hour you used 12.0% of your 5-hour limit. That\'s about 2.00% of your weekly limit, or 48.0% a day.\nThese numbers are estimates that get steadier over time.')
-})
-
-test('the recent pace waits for enough to relate the two limits, and says what for', async () => {
-  const readings: RangeReading[] = [[T0 - 2 * HOUR, 1, 40, weekReset], [T0, 1, 41, weekReset], [T0 - 2 * HOUR, 0, 1, T0 + HOUR], [T0, 0, 9, T0 + HOUR]]
-  const week = project(readings, 'week', T0, { type: 'reset' })!
-  const p = recentPace(readings, week, T0)
-  expect(p.ready).toBe(false)
-  expect(paceText(p)).toBe('No pace yet. It needs your weekly usage to go up 3% while recording. Up 1% so far.')
-})
-
 test('each rise is shared among the responses behind it, not piled before the reading', async () => {
   // the weekly figure reads 10 for an hour (repeated every few minutes), then 11
   const readings: RangeReading[] = [0, 10, 20, 30, 40, 50].map(m => [T0 - HOUR + m * MIN, 1, 10, weekReset] as RangeReading)
@@ -204,4 +170,97 @@ test('each rise is shared among the responses behind it, not piled before the re
   expect(Math.abs(usedBetween(shaped, T0 - HOUR, T0 - 30 * MIN) - 0.5)).toBeLessThan(1e-9)
   // with no responses behind it, the rise stays where the reading put it
   expect(refine(incs, [])).toEqual(incs)
+})
+
+// ---- the last window ----
+
+/** 5-hour readings for a window that resets at `reset`: `pct` at each of `minutes` into it. */
+const fiveWin = (reset: number, pairs: Array<[number, number]>): RangeReading[] =>
+  pairs.map(([m, pct]) => [reset - 5 * HOUR + m * MIN, 0, pct, reset])
+
+test('the last 5-hour window that ended under the limit shows what was left', async () => {
+  // the previous window reset an hour ago at 72%; the current one is under way
+  const prev = T0 - HOUR
+  const readings = [...fiveWin(prev, [[10, 5], [120, 40], [280, 72]]), ...fiveWin(T0 + 4 * HOUR, [[30, 6]])]
+  const l = lastWindow(readings, 'five', T0)!
+  expect(l.resetsAt).toBe(prev)
+  expect(l.ranOutAt).toBe(null)
+  expect(l.left).toBe(28)
+  expect(lastWindowText(l)).toBe('+28%')
+  expect(lastWindowNote(l)).toBe('It ended at 72% used.')
+})
+
+test('a 5-hour window that ran out early shows how much more it would have needed', async () => {
+  // 100% in 4 hours is 25%/h, the card's since-the-reset rate; the hour locked out would have needed 25% more
+  const prev = T0 - HOUR
+  const l = lastWindow(fiveWin(prev, [[30, 10], [230, 95], [240, 100], [270, 100]]), 'five', T0)!
+  expect(l.ranOutAt).toBe(prev - HOUR)
+  expect(l.usedH).toBe(4)
+  expect(l.lockedH).toBe(1)
+  expect(l.left).toBe(-25)
+  expect(lastWindowText(l)).toBe('−25%')
+  expect(lastWindowNote(l)).toBe('It ran out 1h before its reset, after 4h of use.')
+})
+
+test('the last window hides when the record cannot say how it ended', async () => {
+  const prev = T0 - HOUR
+  // no window has reset yet: only the current one is on record
+  expect(lastWindow(fiveWin(T0 + 2 * HOUR, [[10, 5], [100, 30]]), 'five', T0)).toBe(null)
+  expect(lastWindow([], 'five', T0)).toBe(null)
+  // the last reading came two hours before the reset: the rest of that window is unknown
+  const early = fiveWin(prev, [[30, 20], [180, 60]])
+  expect(lastWindow(early, 'five', T0)).toBe(null)
+  // ...unless this computer watched to the end, so nothing more came in
+  expect(lastWindowText(lastWindow(early, 'five', T0, [[prev - 3 * HOUR, prev]])!)).toBe('+40%')
+  // the first reading was already 100%: when it ran out isn't known
+  expect(lastWindow(fiveWin(prev, [[200, 100], [290, 100]]), 'five', T0)).toBe(null)
+  // a long unwatched gap before reaching 100%
+  expect(lastWindow(fiveWin(prev, [[30, 40], [240, 100]]), 'five', T0)).toBe(null)
+  // a 30-minute tail is close enough
+  expect(lastWindowText(lastWindow(fiveWin(prev, [[30, 40], [271, 55]]), 'five', T0)!)).toBe('+45%')
+})
+
+test('the last weekly window: ended under the limit, or ran out a day early', async () => {
+  const prev = T0 - 2 * DAY
+  const cur = prev + 7 * DAY
+  const current: RangeReading[] = [[T0 - DAY, 1, 8, cur], [T0, 1, 15, cur]]
+  // last read 10 hours before its reset, within the last 10% of the week
+  const under: RangeReading[] = [[prev - 3 * DAY, 1, 40, prev], [prev - 10 * HOUR, 1, 81, prev]]
+  expect(lastWindowText(lastWindow([...under, ...current], 'week', T0)!)).toBe('+19%')
+  // 100% after six days is 16.7%/day; the day locked out would have needed about 17% more
+  const out: RangeReading[] = [[prev - 3 * DAY, 1, 60, prev], [prev - DAY - 3 * HOUR, 1, 99, prev], [prev - DAY, 1, 100, prev]]
+  const l = lastWindow([...out, ...current], 'week', T0)!
+  expect(l.lockedH).toBe(24)
+  expect(lastWindowText(l)).toBe('−17%')
+  // read two days before its reset, and not watched since: hidden
+  expect(lastWindow([[prev - 2 * DAY, 1, 70, prev], ...current], 'week', T0)).toBe(null)
+})
+
+test('the last window is the latest one to have reset, its stale readings left out', async () => {
+  const older = T0 - 7 * HOUR, prev = T0 - HOUR
+  const readings: RangeReading[] = [
+    ...fiveWin(older, [[100, 30], [290, 90]]),
+    // the reset jitters by a minute or two between readings: still one window
+    [prev - 2 * HOUR, 0, 50, prev + MIN], [prev - 20 * MIN, 0, 64, prev - 2 * MIN],
+    // taken after the reset but still naming it: the old figure, not the window's end
+    [prev + 5 * MIN, 0, 99, prev],
+    ...fiveWin(T0 + 4 * HOUR, [[20, 3]]),
+  ]
+  expect(lastWindowText(lastWindow(readings, 'five', T0)!)).toBe('+36%')
+  // before that window reset, the one before it was the last
+  expect(lastWindowText(lastWindow(readings, 'five', prev - 30 * MIN)!)).toBe('+10%')
+})
+
+test('the head shows the last window quietly, its caption ending in an info circle', async () => {
+  const prev = T0 - HOUR
+  const readings = [...fiveWin(prev, [[30, 10], [280, 72]]), ...fiveWin(T0 + 3 * HOUR, [[10, 5], [120, 30]])]
+  const m = project(readings, 'five', T0, { type: 'reset' })!
+  const head = headerDraw(m, '5-hour window', 700, undefined, '', lastWindow(readings, 'five', T0))
+  expect(head.svg).toContain('>Last window<')
+  expect(head.svg).toMatch(/fill-opacity="0.7"[^>]*>\+28%</)
+  expect(head.info).toBeDefined()
+  // without one, no fourth figure and no circle
+  const plain = headerDraw(m, '5-hour window', 700, undefined, '')
+  expect(plain.svg).not.toContain('Last window')
+  expect(plain.info).toBeUndefined()
 })

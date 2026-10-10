@@ -300,6 +300,77 @@ export function bars(m: Model, now: number, bucketMin: number, perHours: number)
   return out
 }
 
+// ---- the last window ----
+
+/**
+ * How near its reset a window's last reading must be for its final figure to
+ * be trusted, as a share of the window: its last 10%, so 30 minutes of a
+ * 5-hour window and about 17 hours of a week. A window this computer watched
+ * to its end counts too. The same holds for the stretch in which a window ran
+ * out: from the last reading under 100% to the first at it.
+ */
+export const LAST_TAIL = 0.1
+
+export type LastWindow = {
+  kind: Kind
+  /** When the window reset (ms). */
+  resetsAt: number
+  /** % used by its last reading before the reset (100 once it ran out). */
+  pct: number
+  /**
+   * What was left of the limit at the reset, in %. Negative when it ran out:
+   * how much more the locked-out time would have needed at the rate the
+   * window was used until it ran out, as the card's left-at-reset reads.
+   */
+  left: number
+  /** When it ran out (ms), or null when it didn't; hours used before that, and locked out after. */
+  ranOutAt: number | null
+  usedH: number
+  lockedH: number
+}
+
+/**
+ * The previous window of a limit, as it ended: the latest window whose reset
+ * has passed. Didn't run out: 100 − its last %. Ran out: −(100% ÷ hours from
+ * the window's opening to running out × hours from then to the reset), the
+ * since-the-reset average the card projects with, kept up over the time
+ * locked out. Null when the record can't say: no readings in it, a last
+ * reading too long before the reset, or no telling when it ran out.
+ */
+export function lastWindow(readings: readonly RangeReading[], kind: Kind, now: number, seen: readonly Watch[] = []): LastWindow | null {
+  const rs = ofKind(readings, kind)
+  let resetsAt = -Infinity
+  for (const r of rs) if (r[3] <= now && r[3] > resetsAt) resetsAt = r[3]
+  if (resetsAt === -Infinity) return null
+  const span = SPAN[kind], opened = resetsAt - span, tail = LAST_TAIL * span
+  // that window's readings taken before it reset: one taken after, still naming that reset, is stale
+  const win = rs.filter(r => sameWindowAs(r, resetsAt) && r[0] < resetsAt)
+  const out = win.findIndex(r => r[2] >= 100)
+  if (out >= 0) {
+    const hit = win[out]!, before = win[out - 1]
+    // already out at its first reading, or a long unwatched gap before running out: when isn't known
+    if (!before || (hit[0] - before[0] > tail && !isWatched(seen, before[0], hit[0]))) return null
+    const usedH = Math.max(hit[0] - opened, MIN) / HOUR, lockedH = (resetsAt - hit[0]) / HOUR
+    return { kind, resetsAt, pct: 100, left: -100 / usedH * lockedH, ranOutAt: hit[0], usedH, lockedH }
+  }
+  const last = win[win.length - 1]
+  if (!last || (resetsAt - last[0] > tail && !isWatched(seen, last[0], resetsAt))) return null
+  return { kind, resetsAt, pct: last[2], left: 100 - last[2], ranOutAt: null, usedH: span / HOUR, lockedH: 0 }
+}
+
+/** The caption of the last window's figure. */
+export const LAST_LABEL = 'Last window'
+export const lastWindowText = (l: LastWindow) => signed(l.left)
+/** Whether it reads as short: by the rounded figure, so the colour matches the sign shown. */
+export const lastIsShort = (l: LastWindow) => Math.round(l.left) < 0
+/** What Last window means: the info circle's tooltip. */
+export const LAST_INFO = 'Last window is what was left of this limit when its previous window reset. Negative means it ran out early: how much more you would have needed for the rest of that window, at the rate you used it until then.'
+/** How this one ended, in words. */
+export function lastWindowNote(l: LastWindow): string {
+  if (l.ranOutAt === null) return `It ended at ${Math.round(l.pct)}% used.`
+  return `It ran out ${dur(l.lockedH)} before its reset, after ${dur(l.usedH)} of use.`
+}
+
 // ---- words ----
 
 export const signed = (x: number) => (Math.round(x) >= 0 ? '+' : '−') + Math.abs(Math.round(x)) + '%'
@@ -395,8 +466,10 @@ export const TEXT: Record<Role, { rem: number; weight: number; color: PaletteKey
   countdown: { rem: 0.75, weight: 400, color: 'dim' },
   /** The note under a card: "Average since the reset 23h ago, ...". */
   note: { rem: 0.78, weight: 400, color: 'dim' },
+  /** A quiet figure beside the others, smaller and lighter: "Last window +28%". */
+  aside: { rem: 0.8125, weight: 400, color: 'dim', mono: true },
 }
-type Role = 'title' | 'warning' | 'caption' | 'figure' | 'axis' | 'line' | 'countdown' | 'note'
+type Role = 'title' | 'warning' | 'caption' | 'figure' | 'axis' | 'line' | 'countdown' | 'note' | 'aside'
 const px = (role: Role) => TEXT[role].rem * 16
 /** About how wide a text runs, for laying out around it: mono is 0.6em a character. */
 const textWidth = (str: string, role: Role) =>
@@ -421,28 +494,34 @@ export const pct = (f: number) => `${(f * 100).toFixed(3)}%`
 export const at = (f: number, content: string) => `<svg x="${pct(f)}" y="0" width="1" height="1" overflow="visible">${content}</svg>`
 
 /** A text in its role's style; `fill` and `weight` only where state sets them. */
-const text = (x: number | string, y: number, s: string, o: { role?: Role; fill?: string; anchor?: string; weight?: number } = {}) => {
+const text = (x: number | string, y: number, s: string, o: { role?: Role; fill?: string; anchor?: string; weight?: number; opacity?: number } = {}) => {
   const t = TEXT[o.role ?? 'axis']
-  return `<text x="${typeof x === 'number' ? x.toFixed(1) : x}" y="${y.toFixed(1)}" text-anchor="${o.anchor ?? 'start'}" style="fill:${o.fill ?? C[t.color]}" font-family="${t.mono ? MONO : FONT}" font-size="${t.rem}rem" font-weight="${o.weight ?? t.weight}">${esc(s)}</text>`
+  return `<text x="${typeof x === 'number' ? x.toFixed(1) : x}" y="${y.toFixed(1)}" text-anchor="${o.anchor ?? 'start'}" style="fill:${o.fill ?? C[t.color]}"${o.opacity !== undefined ? ` fill-opacity="${o.opacity}"` : ''} font-family="${t.mono ? MONO : FONT}" font-size="${t.rem}rem" font-weight="${o.weight ?? t.weight}">${esc(s)}</text>`
 }
 
 /**
  * The card's head: the title, the run-out line when the projection goes over,
- * and the three figures. The reset countdown beside it is a Button, not drawn here.
+ * and the three figures; given the last window, a quiet fourth one after them.
  */
 /** Where the head's lines sit: the title, the warning, the captions and the figures, and its height. */
-function headLayout(m: Model, width: number, pace?: Pace) {
+function headLayout(m: Model, width: number, last?: LastWindow | null) {
   const isOver = m.over && !m.noData
   const title = px('title')
   const warning = isOver ? title + px('warning') * 1.6 : title
-  const stats: Array<{ label: string; value: string; fill?: string; info: boolean; w: number; x: number; row: number }> = []
-  const add = (label: string, value: string, fill: string | undefined, info = false) =>
-    stats.push({ label, value, ...(fill ? { fill } : {}), info, w: Math.max(textWidth(label, 'caption') + (info ? px('caption') + 6 : 0), textWidth(value, 'figure')), x: 0, row: 0 })
+  const stats: Array<{ label: string; value: string; fill?: string; info: boolean; role: Role; opacity?: number; w: number; x: number; row: number }> = []
+  const add = (label: string, value: string, fill: string | undefined, o: { info?: boolean; role?: Role; opacity?: number } = {}) => {
+    const role = o.role ?? 'figure', info = !!o.info
+    stats.push({
+      label, value, ...(fill ? { fill } : {}), info, role, ...(o.opacity !== undefined ? { opacity: o.opacity } : {}),
+      w: Math.max(textWidth(label, 'caption') + (info ? px('caption') + 6 : 0), textWidth(value, role)), x: 0, row: 0,
+    })
+  }
   // the left-at-reset figure is coloured by its state; the others take the figure role's colour
   add(m.kind === 'week' ? 'Left at week reset' : 'Left at 5h reset', m.noData ? 'No data' : signed(m.arrive), m.noData ? C.dim : m.over ? C.bad : C.under)
   add('Average', m.noData ? 'No data' : rateText(m, m.rate), m.noData ? C.dim : undefined)
   add('Limit', rateText(m, m.limit), undefined)
-  if (pace) add(PACE_LABEL, pace.ready ? `${fx(pace.rate * 24)}%/day` : 'No data', pace.ready ? undefined : C.dim, true)
+  // the last window: smaller and lighter, in left-at-reset's colours but muted, its caption ending in an info circle
+  if (last) add(LAST_LABEL, lastWindowText(last), lastIsShort(last) ? C.bad : C.under, { info: true, role: 'aside', opacity: 0.7 })
   // the figures flow left to right, onto another row where the card is too narrow for the next
   const gap = px('figure') * 1.5
   let x = 0, row = 0
@@ -461,12 +540,13 @@ function headLayout(m: Model, width: number, pace?: Pace) {
 export type InfoSpot = { cx: number; cy: number; r: number }
 
 /**
- * The head: title, warning, the figures, and the countdown. Given a pace, a
- * fourth figure "1hr pace" whose caption ends in an info circle; the circle
- * itself is drawn by `withInfo`, which can open its tooltip over the chart.
+ * The head: title, warning, the figures, and the countdown. Given the last
+ * window, a quiet fourth figure "Last window" whose caption ends in an info
+ * circle; the circle itself is drawn by `withInfo`, which can open its
+ * tooltip over the chart.
  */
-export function headerDraw(m: Model, title: string, width: number, pal: Palettes = DEFAULT_PALETTES, countdown = '', pace?: Pace): { svg: string; height: number; info?: InfoSpot } {
-  const L = headLayout(m, width, pace)
+export function headerDraw(m: Model, title: string, width: number, pal: Palettes = DEFAULT_PALETTES, countdown = '', last?: LastWindow | null): { svg: string; height: number; info?: InfoSpot } {
+  const L = headLayout(m, width, last)
   let s = text(0, L.title, title, { role: 'title' })
   if (L.isOver) s += text(0, L.warning, runsOut(m), { role: 'warning' })
   // the countdown sits at the right on the title's line
@@ -474,7 +554,7 @@ export function headerDraw(m: Model, title: string, width: number, pal: Palettes
   let spot: InfoSpot | undefined
   for (const st of L.stats) {
     s += text(st.x, L.caption(st.row), st.label, { role: 'caption' })
-    s += text(st.x, L.figure(st.row), st.value, { role: 'figure', ...(st.fill ? { fill: st.fill } : {}) })
+    s += text(st.x, L.figure(st.row), st.value, { role: st.role, ...(st.fill ? { fill: st.fill } : {}), ...(st.opacity !== undefined ? { opacity: st.opacity } : {}) })
     if (st.info) {
       // the circle after the caption
       const r = px('caption') * 0.5
@@ -483,8 +563,8 @@ export function headerDraw(m: Model, title: string, width: number, pal: Palettes
   }
   return { svg: drawing(s, L.height, pal), height: L.height, ...(spot ? { info: spot } : {}) }
 }
-export const headerSvg = (m: Model, title: string, width: number, pal: Palettes = DEFAULT_PALETTES, countdown = '') =>
-  headerDraw(m, title, width, pal, countdown).svg
+export const headerSvg = (m: Model, title: string, width: number, pal: Palettes = DEFAULT_PALETTES, countdown = '', last?: LastWindow | null) =>
+  headerDraw(m, title, width, pal, countdown, last).svg
 
 /**
  * Moves labels apart so none overlap: each sits as near its own line as it can.
@@ -726,64 +806,6 @@ export function noteSvg(note: string, width: number, pal: Palettes = DEFAULT_PAL
   return drawing(lines.map((l, i) => text(0, baseline(i, role), l, { role, ...(fill ? { fill } : {}) })).join(''), H, pal)
 }
 
-// ---- recent pace ----
-
-/** The stretch the recent pace looks back over. */
-export const PACE_HOURS = 1
-/** Weekly points recorded alongside the 5-hour figure before the two can be related. */
-export const PACE_MIN_POINTS = 3
-
-export type Pace =
-  | { ready: false; why: string }
-  | {
-    ready: true
-    /** 5-hour points per weekly point, over `basisH` hours of record. */
-    ratio: number
-    basisH: number
-    /** 5-hour points used in the last PACE_HOURS. */
-    recent: number
-    /** The weekly pace that is, in % per hour. */
-    rate: number
-    runsOutIn: number
-    early: number
-    over: boolean
-    arrive: number
-  }
-
-/**
- * The weekly limit at the last hour's pace. The weekly figure moves in whole
- * points, too coarse to read an hour from; the 5-hour figure moves several
- * times faster. Over the record, the 5-hour points that went with each weekly
- * point give the exchange rate; the last hour's 5-hour points, so exchanged,
- * give the weekly pace.
- */
-export function recentPace(readings: readonly RangeReading[], week: Model, now: number, seen: readonly Watch[] = []): Pace {
-  const fives = ofKind(readings, 'five'), weeks = ofKind(readings, 'week')
-  if (!fives.length || !weeks.length) return { ready: false, why: 'Your weekly and 5-hour usage arrive with Claude’s next response.' }
-  const fiveFor = (now - fives[0]![0]) / HOUR
-  if (fiveFor < PACE_HOURS) return { ready: false, why: `It needs ${dur(PACE_HOURS)} of recording. About ${dur(PACE_HOURS - fiveFor)} to go.` }
-  const start = Math.max(fives[0]![0], weeks[0]![0])
-  const fiveIncs = increments(readings, 'five', seen)
-  const weekPoints = usedBetween(week.increments, start, now)
-  if (weekPoints < PACE_MIN_POINTS) {
-    return { ready: false, why: `It needs your weekly usage to go up ${PACE_MIN_POINTS}% while recording. Up ${Math.floor(weekPoints)}% so far.` }
-  }
-  // the last hour has to be on record here, not a gap whose rise was placed in it afterwards
-  if (!isWatched(seen, now - PACE_HOURS * HOUR, now)) return { ready: false, why: `It needs the last ${dur(PACE_HOURS)} recorded without a break.` }
-  const ratio = usedBetween(fiveIncs, start, now) / weekPoints
-  const recent = usedBetween(fiveIncs, now - PACE_HOURS * HOUR, now)
-  const rate = ratio > 0 ? recent / ratio / PACE_HOURS : 0
-  const proj = week.pct + rate * week.left
-  const runsOutIn = rate > 0 ? (100 - week.pct) / rate : Infinity
-  return {
-    ready: true, ratio, basisH: (now - start) / HOUR, recent, rate, runsOutIn,
-    early: Math.max(0, week.left - runsOutIn), over: proj > 100, arrive: 100 - proj,
-  }
-}
-
-/** The caption of the pace figure. */
-export const PACE_LABEL = '1hr pace'
-
 /**
  * The head and the chart (or its empty state) as one drawing, so the head's
  * info circle can open its tooltip over the chart. A click or the pointer on
@@ -791,7 +813,7 @@ export const PACE_LABEL = '1hr pace'
  * takes focus on a click and CSS shows the box while it has focus or the
  * pointer. Drawn interactive for that.
  */
-export function withInfo(head: { svg: string; height: number; info?: InfoSpot }, chart: string, tip: string, width: number, pal: Palettes = DEFAULT_PALETTES, label = 'How is the 1hr pace worked out?'): string {
+export function withInfo(head: { svg: string; height: number; info?: InfoSpot }, chart: string, tip: string, width: number, pal: Palettes = DEFAULT_PALETTES, label = 'What is this?'): string {
   const inner = (svg: string) => /^<svg [^>]*>([\s\S]*)<\/svg>$/.exec(svg)![1]!
   const hH = drawingHeight(head.svg), cH = drawingHeight(chart), gap = 10
   const nest = (svg: string, y: number, h: number) => `<svg x="0" y="${y}" width="100%" height="${h}" overflow="visible">${inner(svg)}</svg>`
@@ -815,22 +837,6 @@ export function withInfo(head: { svg: string; height: number; info?: InfoSpot },
     over = css + info + box
   }
   return drawing(nest(head.svg, 0, hH) + nest(chart, hH + gap, cH) + over, H, pal)
-}
-/** What the pace comes to: the tooltip's first line. */
-export function paceText(p: Pace): string {
-  if (!p.ready) return `No pace yet. ${p.why}`
-  return p.over
-    ? `At this pace, the weekly limit runs out ${dur(p.early)} early.`
-    : `At this pace, the weekly limit lasts to the reset with ${Math.max(0, Math.round(p.arrive))}% left.`
-}
-
-/** How the pace is worked out, with this account's own numbers once there are some. */
-export function paceExplain(p: Pace): string {
-  if (!p.ready) return 'While recording, the plugin learns how much of your 5-hour limit goes with each 1% of your weekly limit.'
-  return [
-    `In the last hour you used ${fx(p.recent)}% of your 5-hour limit. That's about ${fx(p.recent / p.ratio, 2)}% of your weekly limit, or ${fx(p.rate * 24)}% a day.`,
-    'These numbers are estimates that get steadier over time.',
-  ].join('\n')
 }
 
 // ---- fitting the pane ----

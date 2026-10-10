@@ -12,7 +12,7 @@ import { DEFAULT_PALETTES } from './theme'
  * weight: rise ≈ Σ w·T. The 5-hour figure moves several times faster than the
  * weekly one, so it gives several times the stretches; how models compare
  * comes out the same from either limit, and the week's points are the 5-hour
- * ones exchanged at the account's own rate (as the 1hr pace does). Within a
+ * ones exchanged at the account's own rate (5-hour points per weekly point). Within a
  * model, its token kinds are combined at that model's published price ratios
  * (UNITS), so only the weight across models is learned. A model's cost shows
  * once its weight is known within ±SHOW_WITHIN.

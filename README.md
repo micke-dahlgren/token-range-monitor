@@ -37,6 +37,7 @@ claude plugin update token-range-monitor
 **The pane** has one card per limit, showing:
 
 - **Left at reset**, **Average** (your usage rate) and **Limit** (the highest rate you can keep up until the reset without running out). When you're over, it also says when you'd run out.
+- **Last window**, small and dim beside them: how the previous window of that limit ended, in the same terms as Left at reset. **+28%** means it reset with 28% unused. A negative value means it ran out early, and is how much more you'd have needed for the time you were locked out, at the rate you'd used it until then. It only shows when the record covers that window's end.
 - A chart of your usage over the averaging window, ending at *Now*. The dotted line is your average and the solid line is the limit. If the dotted line is above the solid one, you'll run out before the reset.
 - Bars are usage seen as it happened. Anthropic reports each limit in whole percents, so each rise is shared among the responses made since the previous one, by their size. That way the bars follow your actual work and don't all come out one percent high. Stretches the plugin didn't see (before it was installed, or while no session here was getting responses) show as one low block labelled with what's known, like "12% used while away, 9h".
 - For the weekly limit, a choice of what the average covers:
@@ -64,20 +65,9 @@ The mod shows **No data** rather than a misleading number when there isn't enoug
 - **Since reset waits 6 hours after each weekly reset.**
 - **The 5-hour estimate averages since the window opened,** from Anthropic's own figure, and its chart shows the whole window. It starts 15 minutes after the window opens.
 
-### Recent pace
-
-The weekly card also answers "if I keep going like the last hour, when do I run out?"
-
-The weekly percentage moves in whole points, too coarse to read one hour from. The 5-hour percentage moves several times faster, so the pace is read from it:
-
-1. From your recorded history, the mod learns how many 5-hour points go with one weekly point on your account. It waits for 3 weekly points before trusting that.
-2. Your last hour of 5-hour usage, divided by that ratio, is your weekly pace.
-
-**How is this worked out?** under the line shows the numbers for your account. It's an estimate, and it settles as more usage is recorded.
-
 ### Model costs
 
-Every response, subagents' included, reports its model, effort and tokens. Between two readings of the 5-hour limit that this computer watched throughout, the mod knows how far the limit rose and which models did the work. Over the last 14 days it solves for each model's weight. It reads the 5-hour limit because it moves several times faster than the weekly one, which gives many more readings to learn from. Models compare the same on either limit, and this week's points use the same exchange rate as the 1hr pace. Within a model, output, input and cache tokens are combined at that model's published price ratios, so only the weight across models is learned.
+Every response, subagents' included, reports its model, effort and tokens. Between two readings of the 5-hour limit that this computer watched throughout, the mod knows how far the limit rose and which models did the work. Over the last 14 days it solves for each model's weight. It reads the 5-hour limit because it moves several times faster than the weekly one, which gives many more readings to learn from. Models compare the same on either limit, and this week's points are the 5-hour points exchanged at your account's own rate: how many 5-hour points went with each weekly point while this computer was watching. Within a model, output, input and cache tokens are combined at that model's published price ratios, so only the weight across models is learned.
 
 Each model is judged on its own. Its cost shows once the 90% range of its weight is within ±20%. Until then its row shows **Learning** with a meter, and its points this week wait under **Not split yet**. With steady use, Opus usually shows within hours. A cheap model you rarely use, like Haiku in subagents, takes longer.
 

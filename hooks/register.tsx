@@ -4,10 +4,10 @@ import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 import type { RangeReading, RangeSettings, RangeStep, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
-  drawingHeight, emptyChartSvg, emptyChartText, fit, fx, headerDraw, paceExplain, paceText, recentPace, withInfo, fiveChart, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
+  drawingHeight, emptyChartSvg, emptyChartText, fit, headerDraw, withInfo, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
   isShort, leftText, refine, runsOut, weekChart, windowHours,
 } from './range'
-import type { Average, Model } from './range'
+import type { Average, LastWindow, Model } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
 import { baselineOf, learn, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
 
@@ -254,8 +254,9 @@ async function models($: EngineInterface) {
   return {
     now, s, weekRecorded, pal, week,
     five: shaped(project(list, 'five', now, fiveAvg, watched)),
-    // the pace and the costs read the rises as the readings gave them
-    pace: projected ? recentPace(list, projected, now, watched) : null,
+    // how each limit's previous window ended, where the record can tell
+    lastWeek: lastWindow(list, 'week', now, watched),
+    lastFive: lastWindow(list, 'five', now, watched),
     learned,
     steps: stepList,
   }
@@ -379,27 +380,33 @@ export const register: Register = on => {
 
   // B: the side pane
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { now, s, week, five, pal, pace, weekRecorded, learned, steps: stepList } = await models($)
+    const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, steps: stepList } = await models($)
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
-    const Svg = 'Svg' in els ? els.Svg : null
+    // the terminal draws no Svg: there the cards are text
+    const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
     // both cards fit the pane: charts drawn at its width, sharing the height that's left
     const size = fit(e.props.bodyColumns)
-    // the weekly head carries the 1hr pace, its info circle opening a tooltip over the chart: head and chart are one drawing
-    const weekDrawing = (m: Model) => {
-      const chart = emptyChartText(m, now) ? emptyChartSvg(m, now, size.width, pal) : weekChart(m, now, size.width, pal, size.weekHeight)
-      if (!pace) return chart
-      const head = headerDraw(m, 'This week', size.width, pal, resetsIn(m, s.fine), pace)
-      return withInfo(head, chart, `${paceText(pace)}\n${paceExplain(pace)}`, size.width, pal)
+    // a head with the last window carries its info circle, opening a tooltip over the chart: head and chart are one drawing
+    const lastOf = (m: Model) => (m.kind === 'week' ? lastWeek : lastFive)
+    const cardDrawing = (m: Model, title: string) => {
+      const chart = emptyChartText(m, now) ? emptyChartSvg(m, now, size.width, pal)
+        : m.kind === 'week' ? weekChart(m, now, size.width, pal, size.weekHeight) : fiveChart(m, now, size.width, pal, size.fiveHeight)
+      const last = lastOf(m)
+      if (!last) return chart
+      const head = headerDraw(m, title, size.width, pal, resetsIn(m, s.fine), last)
+      return withInfo(head, chart, `${LAST_INFO}\n${lastWindowNote(last)}`, size.width, pal, 'What is Last window?')
     }
+    const lastAlt = (last: LastWindow | null) => (last ? `${LAST_LABEL} ${lastWindowText(last)}. ${lastWindowNote(last)} ` : '')
 
     // one dark card per limit, as on the car's display: head, chart, controls, then the notes
     // every drawing in a frame as wide as the card, given its height: it fills the width, and its text keeps its size
     const Draw = ({ svg, alt }: { svg: string; alt: string }) =>
       Svg ? <Svg source={svg} height={drawingHeight(svg)} isInteractive alt={alt} /> : null
-    // `chart` may hold the head too (the weekly card with its pace): then no separate head is drawn
+    // `chart` may hold the head too (a card with its last window): then no separate head is drawn
     const block = (title: string, m: Model, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
       const headInChart = !!chart?.includes('class="info"')
+      const last = lastOf(m)
       return (
       <Box
         key={`block-${m.kind}`}
@@ -423,8 +430,15 @@ export const register: Register = on => {
               <Text bold>{title}</Text>
               {isShort(m) && <Text color="error">{runsOut(m)}</Text>}
               <Text>
-                {`${m.kind === 'week' ? 'Left at week reset' : 'Left at 5h reset'} ${leftText(m)} · Average ${m.noData ? 'no data' : rateText(m, m.rate)} · Limit ${rateText(m, m.limit)}${m.kind === 'week' && pace ? ` · 1hr pace ${pace.ready ? `${fx(pace.rate * 24)}%/day` : 'no data'}` : ''}`}
+                {`${m.kind === 'week' ? 'Left at week reset' : 'Left at 5h reset'} ${leftText(m)} · Average ${m.noData ? 'no data' : rateText(m, m.rate)} · Limit ${rateText(m, m.limit)}`}
               </Text>
+              {/* the last window, quietly: dim, its figure in left-at-reset's colour */}
+              {last && (
+                <Box key={`last-${m.kind}`} flexDirection="row" columnGap={1}>
+                  <Text dimColor>{LAST_LABEL}</Text>
+                  <Text dimColor color={lastIsShort(last) ? 'error' : 'success'}>{lastWindowText(last)}</Text>
+                </Box>
+              )}
             </Box>
           )}
           {!Svg && <Button key={`reset-${m.kind}`} plain label={resetsIn(m, s.fine)} onPress={() => toggleFine($)} />}
@@ -434,7 +448,7 @@ export const register: Register = on => {
           {chart && Svg && (
             <Draw
               svg={chart}
-              alt={`${headInChart ? `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}. ${pace ? `1hr pace ${pace.ready ? `${fx(pace.rate * 24)}%/day` : 'no data'}. ${paceText(pace)} ${paceExplain(pace)} ` : ''}` : ''}${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Average ${rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}`}
+              alt={`${headInChart ? `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}. ${lastAlt(last)}` : ''}${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Average ${rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}`}
             />
           )}
           {controls}
@@ -523,12 +537,12 @@ export const register: Register = on => {
     return (
       <Box key="cards" flexDirection="column">
         {week
-          ? block('This week', week, Svg ? weekDrawing(week) : null, windowControls, [
+          ? block('This week', week, Svg ? cardDrawing(week, 'This week') : null, windowControls, [
             ...(Svg && emptyChartText(week, now) ? [] : [averageNote(week)]),
           ])
           : <Text dimColor>No weekly limit reported.</Text>}
         {five
-          ? block('5-hour window', five, Svg ? (emptyChartText(five, now) ? emptyChartSvg(five, now, size.width, pal) : fiveChart(five, now, size.width, pal, size.fiveHeight)) : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
+          ? block('5-hour window', five, Svg ? cardDrawing(five, '5-hour window') : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
           : <Text dimColor>No active 5-hour window.</Text>}
         {modelsCard}
       </Box>

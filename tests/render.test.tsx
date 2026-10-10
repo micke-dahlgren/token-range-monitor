@@ -108,3 +108,50 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   expect(wide[0]!).toBeGreaterThan(narrow[0]! + 60)
   expect(wideTaller[0]).toBe(wide[0])
 })
+
+test('both cards show the last window, on the desktop and in the terminal', async ($, on) => {
+  mock.store(on)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  // the previous 5-hour window ended at 72% just before it reset an hour ago; the previous week ran out a day early
+  const prevFive = T0 - HOUR, prevWeek = weekReset - 7 * DAY
+  const earlier: RangeReading[] = [
+    [prevFive - 4 * HOUR, 0, 20, prevFive], [prevFive - 20 * 60_000, 0, 72, prevFive],
+    [prevWeek - 3 * DAY, 1, 60, prevWeek], [prevWeek - DAY - 3 * HOUR, 1, 99, prevWeek], [prevWeek - DAY, 1, 100, prevWeek],
+  ]
+  const readings = [...earlier, ...READINGS].sort((a, b) => a[0] - b[0])
+  const clock = mock.clock(on, { now: readings[0]![0] })
+  for (const [t, kind, pct, resetsAt] of readings) {
+    await clock.set(t)
+    await $.session.measure({
+      context: {} as never,
+      rateLimits: [{ kind: kind === 1 ? 'seven_day' : 'five_hour', percentUsed: pct, resetsAt: new Date(resetsAt).toISOString() }],
+      changed: ['rateLimits'],
+    })
+  }
+  const PANE = { component: 'Pane', requestId: 'token-range-monitor', props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 60, placement: 'dock' } as never } as const
+
+  // the desktop: drawn in each card's head, with its info circle and tooltip
+  const desk = await $.ui.mount({ plugin: 'token-range-monitor', surface: 'desktop', ...PANE })
+  const alts = (await desk.findAll({ type: 'Svg' })).map(x => String(x.props.alt))
+  expect(alts.some(a => a.startsWith('This week.') && a.includes('Last window −17%. It ran out 1d before its reset, after 6d of use.'))).toBe(true)
+  expect(alts.some(a => a.startsWith('5-hour window.') && a.includes('Last window +28%. It ended at 72% used.'))).toBe(true)
+  const sources = (await desk.findAll({ type: 'Svg' })).map(x => String(x.props.source)).filter(src => src.includes('>Last window<'))
+  expect(sources.length).toBe(2)
+  for (const src of sources) expect(src).toContain('aria-label="What is Last window?"')
+  await desk.unmount()
+
+  // the terminal: a dim line under the figures
+  const term = await $.ui.mount({ plugin: 'token-range-monitor', surface: 'terminal', ...PANE })
+  expect((await term.findAll({ type: 'Text', text: 'Last window' })).length).toBe(2)
+  expect(await term.find({ type: 'Text', text: '+28%' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: '−17%' })).toBeDefined()
+  await term.unmount()
+
+  // the band above the prompt doesn't show it
+  const band = await $.ui.mount({
+    plugin: 'token-range-monitor', surface: 'desktop', component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 120 } as never,
+  })
+  expect(await band.find({ type: 'Text', text: 'Last window' })).toBeUndefined()
+  await band.unmount()
+})
