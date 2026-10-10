@@ -5,7 +5,7 @@ import type { RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } fr
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   drawingHeight, emptyChartSvg, emptyChartText, fit, fitHeight, CELL_PX, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
-  bandPart, bandWidth, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours,
+  bandPart, bandWidth, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind,
 } from './range'
 import type { Average, LastWindow, Model, TrackSeg, TrackTone } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
@@ -415,11 +415,10 @@ async function capture($: EngineInterface, limits: readonly SessionRateLimit[]) 
     const kind = rl.kind === 'five_hour' ? 0 : rl.kind === 'seven_day' ? 1 : -1
     if (kind === -1 || !rl.resetsAt) continue
     const resetsAt = Date.parse(rl.resetsAt)
-    let last: RangeReading | undefined
-    for (const r of known) if (r[1] === kind && (!last || r[0] >= last[0])) last = r
-    if (!last || last[2] !== rl.percentUsed || Math.abs(last[3] - resetsAt) > 5 * MIN) {
-      fresh.push([now, kind, rl.percentUsed, resetsAt])
-    }
+    const r: RangeReading = [now, kind, rl.percentUsed, resetsAt]
+    // this session's figures may be older than another's: only a new one is recorded
+    const last = ofKind(known, kind === 0 ? 'five' : 'week').at(-1)
+    if (!isStale(r, last) && (!last || last[2] !== r[2] || Math.abs(last[3] - r[3]) > 5 * MIN)) fresh.push(r)
   }
   if (fresh.length === 0) return
   if (!ownKey) ownKey = newOwnKey(now)

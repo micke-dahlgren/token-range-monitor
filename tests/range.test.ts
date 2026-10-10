@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, increments, lastWindow, lastWindowNote, lastWindowText, isWatched, needsMore, refine, parseWindow, project, resetsIn, signed, bandPart, bandWidth, paceText, rangeTrack, spreadLabels, TRACK_LABEL, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, increments, lastWindow, lastWindowNote, lastWindowText, isWatched, needsMore, ofKind, refine, parseWindow, project, resetsIn, signed, bandPart, bandWidth, paceText, rangeTrack, spreadLabels, TRACK_LABEL, usedBetween } from '../hooks/range'
 import type { Model } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
@@ -272,7 +272,7 @@ test('the last window is the latest one to have reset, its stale readings left o
 
 test('the head shows the last window quietly, its caption ending in an info circle', async () => {
   const prev = T0 - HOUR
-  const readings = [...fiveWin(prev, [[30, 10], [280, 72]]), ...fiveWin(T0 + 3 * HOUR, [[10, 5], [120, 30]])]
+  const readings = [...fiveWin(prev, [[30, 10], [280, 72]]), ...fiveWin(T0 + 4 * HOUR, [[10, 5], [60, 30]])]
   const m = project(readings, 'five', T0, { type: 'reset' })!
   const head = headerDraw(m, '5-hour window', 700, undefined, '', lastWindow(readings, 'five', T0))
   expect(head.svg).toContain('>Last window<')
@@ -319,4 +319,15 @@ test('the terminal track: short stops at ╳ with how early under it, lasting ru
   // no use yet, and no estimate
   expect(rangeTrack(model({ left: 2, runsOutIn: Infinity, arrive: 60 }), 42)!.unused!.right.text).toBe('lasts past the reset')
   expect(rangeTrack(model({ left: 2, runsOutIn: 3, noData: 'No estimate yet.' }), 42)).toBeNull()
+})
+
+test("an idle session's older figures, recorded again each minute, are left out", async () => {
+  const reset = T0 + 3 * HOUR
+  // a busy session at 8% and an idle one still holding 7% took turns, as before 1.3.3
+  const readings: RangeReading[] = [7, 8, 7, 8, 7, 8, 7].map((pct, i) => [T0 - (30 - i) * MIN, 0, pct, reset])
+  // and after the reset, a session still naming the old window
+  readings.push([reset + MIN, 0, 8, reset])
+  expect(ofKind(readings, 'five').map(r => r[2])).toEqual([7, 8, 8, 8])
+  expect(increments(readings, 'five').reduce((a, i) => a + i.amount, 0)).toBe(1)
+  expect(project(readings, 'five', T0, { type: 'reset' })!.pct).toBe(8)
 })

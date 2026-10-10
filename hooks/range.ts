@@ -62,8 +62,23 @@ export function parseWindow(text: string): Pick<RangeSettings, 'n' | 'unit'> | n
 const sameWindow = (a: RangeReading, b: RangeReading) => Math.abs(a[3] - b[3]) < 5 * MIN
 const sameWindowAs = (r: RangeReading, resetsAt: number) => Math.abs(r[3] - resetsAt) < 5 * MIN
 
+/**
+ * Whether reading `r` is an old figure come back with a later time, after `last`, the latest one kept.
+ * A session that has had no response for a while still holds the figures of its last one, and
+ * a version before 1.3.3 recorded them again each minute, taking turns with a busier session
+ * (8, 7, 8, 7…). A limit only rises within its window, so a lower figure in the same window, a
+ * figure naming an earlier window, or one taken after its own reset is stale.
+ */
+export const isStale = (r: RangeReading, last: RangeReading | undefined) =>
+  r[0] >= r[3] || (!!last && (r[3] < last[3] - 5 * MIN || (sameWindow(last, r) && r[2] < last[2])))
+
+/** One limit's readings in time order, stale ones left out. */
 export function ofKind(readings: readonly RangeReading[], kind: Kind): RangeReading[] {
-  return readings.filter(r => r[1] === KIND[kind]).sort((a, b) => a[0] - b[0])
+  const out: RangeReading[] = []
+  for (const r of readings.filter(r => r[1] === KIND[kind]).sort((a, b) => a[0] - b[0])) {
+    if (!isStale(r, out[out.length - 1])) out.push(r)
+  }
+  return out
 }
 
 /** Merges reading lists, dropping duplicates and anything older than KEEP. */

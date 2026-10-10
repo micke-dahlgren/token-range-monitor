@@ -135,13 +135,15 @@ test('the band and the pane draw on the desktop', async ($, on) => {
 test('both cards show the last window, on the desktop and in the terminal', async ($, on) => {
   mock.store(on)
   on('session.measure', (_$, e) => ({ changed: e.changed }))
-  // the previous 5-hour window ended at 72% just before it reset an hour ago; the previous week ran out a day early
-  const prevFive = T0 - HOUR, prevWeek = weekReset - 7 * DAY
+  // the previous 5-hour window ended at 72% just before it reset, as the current one opened; the previous week ran out a day early
+  const prevFive = fiveReset - 5 * HOUR, prevWeek = weekReset - 7 * DAY
   const earlier: RangeReading[] = [
     [prevFive - 4 * HOUR, 0, 20, prevFive], [prevFive - 20 * 60_000, 0, 72, prevFive],
     [prevWeek - 3 * DAY, 1, 60, prevWeek], [prevWeek - DAY - 3 * HOUR, 1, 99, prevWeek], [prevWeek - DAY, 1, 100, prevWeek],
   ]
-  const readings = [...earlier, ...READINGS].sort((a, b) => a[0] - b[0])
+  // this week's readings from before it opened would name it while the previous one ran: none can
+  const current = READINGS.filter(r => r[1] === 0 || r[0] >= weekReset - 7 * DAY)
+  const readings = [...earlier, ...current].sort((a, b) => a[0] - b[0])
   const clock = mock.clock(on, { now: readings[0]![0] })
   for (const [t, kind, pct, resetsAt] of readings) {
     await clock.set(t)

@@ -109,7 +109,9 @@ export function learn(readings: readonly RangeReading[], steps: readonly RangeSt
   const from = now - LEARN_SPAN
   const recent = steps.filter(s => s[0] >= from && s[0] <= now)
   const ids = [...new Set(recent.map(s => s[1]))].sort(byRank)
-  const fives = ofKind(readings, 'five').filter(r => r[0] >= from)
+  // each point where it was first reached: a repeat of it (another session, another device) would split a
+  // stretch in two, the work before the repeat seeming to have cost nothing
+  const fives = ofKind(readings, 'five').filter((r, i, all) => r[0] >= from && !(i > 0 && all[i - 1]![2] === r[2] && Math.abs(all[i - 1]![3] - r[3]) <= 5 * 60_000))
   const sorted = [...recent].sort((a, b) => a[0] - b[0])
 
   // the stretches: how far the limit rose, and each model's tokens (in millions) meanwhile
