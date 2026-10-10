@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { RangeReading, RangeSettings, RangeStep, RangeWatch } from '../types'
+import type { RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   drawingHeight, emptyChartSvg, emptyChartText, fit, headerDraw, withInfo, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
@@ -10,6 +10,8 @@ import {
 import type { Average, LastWindow, Model } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
 import { baselineOf, learn, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
+import { agoText, cancelSignIn, configureSync, DEVICE_KEY, deleteSynced, downloadedFor, endSync, isDeviceId, signIn, signOut, startSync, syncTick } from './sync'
+import type { Lists, SyncIO } from './sync'
 
 const PANE = 'token-range-monitor'
 const TITLE = 'Token Range Monitor'
@@ -19,6 +21,8 @@ const tick = atom({ plugin: 'token-range-monitor', key: 'tick' } as const, 0)
 const seen = atom({ plugin: 'token-range-monitor', key: 'seen' } as const, [])
 const palettes = atom({ plugin: 'token-range-monitor', key: 'palettes' } as const, DEFAULT_PALETTES)
 const steps = atom({ plugin: 'token-range-monitor', key: 'steps' } as const, [])
+/** What the pane's sync row shows; sync itself (./sync) keeps it through syncIO. */
+const syncView = atom({ plugin: 'token-range-monitor', key: 'sync' } as const, { status: 'signedOut' } as RangeSync)
 
 /**
  * Usage limits are the account's, so the record is too: everything is stored
@@ -106,8 +110,12 @@ async function otherCopies($: EngineInterface): Promise<Array<[string, unknown]>
   }
 }
 
-async function loadAll($: EngineInterface) {
-  const now = await $.clock.now()
+/**
+ * Every list recorded on this computer for the signed-in account: this
+ * session's, the other sessions', the other copies'. Lists other devices
+ * synced are not among them (they are kept under `sync:` keys).
+ */
+async function localLists($: EngineInterface, now: number) {
   const lists: RangeReading[][] = [own]
   const spans: RangeWatch[] = []
   const stepLists: RangeStep[][] = []
@@ -136,6 +144,52 @@ async function loadAll($: EngineInterface) {
     else if (kind === 'u') stepLists.push(list as RangeStep[])
     else lists.push(list as RangeReading[])
   }
+  return { lists, spans, stepLists }
+}
+
+/** What this computer recorded, this session's unsaved part included: what sync uploads. */
+async function collectLocal($: EngineInterface): Promise<Lists> {
+  const { lists, spans, stepLists } = await localLists($, await $.clock.now())
+  return { readings: lists, spans: [...spans, ...ownSeen], steps: [...stepLists, ownSteps] }
+}
+
+/** A device id another copy's store already holds, so every copy on this computer syncs as one device. */
+async function peekDevice($: EngineInterface): Promise<string | undefined> {
+  for (const [key, value] of await otherCopies($)) if (key === DEVICE_KEY && isDeviceId(value)) return value
+  return undefined
+}
+
+/** What sync reaches through the engine: every call on `$` spelled here, in the hooks module. */
+function syncIO($: EngineInterface): SyncIO {
+  return {
+    now: () => $.clock.now(),
+    fetch: (url, init) => $.http.fetch(url, init),
+    get: key => $.store.get(key),
+    set: (key, value) => $.store.set(key, value),
+    del: key => $.store.delete(key),
+    keys: () => $.store.keys(),
+    trafficOff: () => $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'),
+    hostName: async () => (await $.env.get('COMPUTERNAME')) ?? (await $.env.get('HOSTNAME')),
+    every: (ms, fn) => $.clock.every(ms, fn),
+    after: (ms, fn) => $.clock.after(ms, fn),
+    log: (text, options) => $.ui.log(text, options),
+    view: () => read($, syncView),
+    setView: async change => { await update($, syncView, change) },
+    account: () => account,
+    collect: () => collectLocal($),
+    reload: () => loadAll($),
+    peekDevice: () => peekDevice($),
+  }
+}
+
+async function loadAll($: EngineInterface) {
+  const now = await $.clock.now()
+  const { lists, spans, stepLists } = await localLists($, now)
+  // the other devices' lists, as synced: read beside this computer's, merging drops the repeats
+  const far = await downloadedFor(syncIO($), account)
+  lists.push(...(far.readings as RangeReading[][]))
+  spans.push(...far.spans)
+  stepLists.push(...(far.steps as RangeStep[][]))
   othersSeen = spans
   othersSteps = mergeSteps(stepLists, now)
   await update($, steps, () => mergeSteps([othersSteps, ownSteps], now))
@@ -277,7 +331,9 @@ async function setWindow($: EngineInterface, n: number, unit: 'h' | 'd') {
   await choose($, { mode: 'window', n: clampWindow(n, unit), unit })
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  configureSync(options.syncServer)
+
   on('session.start', async ($, e, next) => {
     account = ''
     await followAccount($)
@@ -289,18 +345,33 @@ export const register: Register = on => {
       description: 'Token Range Monitor: open the pane, or set what the weekly average covers (/token-range 2d, /token-range 6h, /token-range reset)',
       argumentHint: '[window | reset]',
     })
+    await startSync(syncIO($))
     await loadAll($)
-    await loadTheme($)
+    // a theme that can't be read leaves the card's default colours, never the rest of the start
+    await loadTheme($).catch(() => undefined)
     await capture($, (await $.session.usage()).rateLimits)
-    // once a minute: pick up other sessions' readings and move "now" along
+    // the first sync waits for the session to be under way: nothing on the network holds up its start
+    $.clock.after(1_000, () => void syncTick(syncIO($), true))
+    // once a minute: pick up other sessions' readings and move "now" along; sync when it's due
     $.clock.every(60_000, async () => {
       await saveSteps($, await $.clock.now())
-      await followAccount($)
+      const moved = await followAccount($)
       await loadAll($)
-      await loadTheme($)   // picks up a theme file edited in place
+      await loadTheme($).catch(() => undefined)   // picks up a theme file edited in place
       await capture($, (await $.session.usage()).rateLimits)
       await update($, tick, n => n + 1)
+      // another account's record syncs at once
+      await syncTick(syncIO($), moved)
     })
+    return next(e)
+  })
+
+  // at the end, the responses not yet saved are, and sync uploads once more
+  on('session.end', async ($, e, next) => {
+    try {
+      await saveSteps($, await $.clock.now())
+      await endSync(syncIO($))
+    } catch { /* never in the way of the exit */ }
     return next(e)
   })
 
@@ -382,7 +453,8 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, steps: stepList } = await models($)
     const els = $.ui.resolve(e)
-    const { Box, Text, Button } = els
+    const { Box, Text, Button, Link } = els
+    const sync = await read($, syncView)
     // the terminal draws no Svg: there the cards are text
     const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
     // both cards fit the pane: charts drawn at its width, sharing the height that's left
@@ -499,7 +571,8 @@ export const register: Register = on => {
     const modelsCard = (
       <Box key="block-models" flexDirection="column" gap={1} marginBottom={1} padding={2} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
         {Svg ? (
-          <>
+          // a column like the card's own, so a part left out (no baseline, no spend yet) is simply not there
+          <Box flexDirection="column" gap={1}>
             {/* the head's info circle opens its tooltip over the rows: head and rows are one drawing */}
             <Draw svg={withInfo(modelsHead(learned, now, pal), modelsCosts(learned, base, size.width, pal), MODELS_INFO, size.width, pal, 'What do these figures mean?')} alt={`Models. ${modelsText(learned, base, null).join(' ')}`} />
             {base && (
@@ -509,7 +582,7 @@ export const register: Register = on => {
               </Box>
             )}
             {sp && <Draw svg={modelsSpend(sp, size.width, pal)} alt={modelsText({ ...learned, models: [] }, null, sp).join(' ')} />}
-          </>
+          </Box>
         ) : (
           <Box flexDirection="column">
             <Text bold>Models</Text>
@@ -525,11 +598,57 @@ export const register: Register = on => {
       </Box>
     )
 
+    // sync across devices: one quiet row under the cards, the same on every surface
+    const syncRow = (v: RangeSync) => {
+      const dot = <Text color="inactive">·</Text>
+      return (
+        <Box key="sync" flexDirection="column" gap={1} marginTop={1}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
+            {v.status === 'signedIn' ? (
+              <>
+                <Text color="inactive">{`Synced as ${v.email || 'you'}`}</Text>
+                {dot}
+                <Text color="inactive">{`last sync ${agoText(v.last, now)}`}</Text>
+                {dot}
+                <Button key="sync-signout" label="Sign out" dimColor={!!v.busy} onPress={() => void signOut(syncIO($))} />
+                {dot}
+                <Button key="sync-delete" label={v.confirmDelete ? 'Press again to delete all synced data' : 'Delete synced data'}
+                  variant={v.confirmDelete ? 'primary' : 'secondary'} dimColor={!!v.busy} onPress={() => void deleteSynced(syncIO($))} />
+              </>
+            ) : v.status === 'waiting' ? (
+              <>
+                <Text color="inactive">{`Waiting for sign-in… code ${v.code ?? ''}`}</Text>
+                {dot}
+                <Button key="sync-cancel" label="Cancel" onPress={() => void cancelSignIn(syncIO($))} />
+              </>
+            ) : (
+              <>
+                <Text color="inactive">Sync across devices</Text>
+                {dot}
+                {v.status === 'off'
+                  ? <Text color="inactive">off</Text>
+                  : <Button key="sync-signin" label="Sign in" dimColor={!!v.busy} onPress={() => void signIn(syncIO($))} />}
+              </>
+            )}
+          </Box>
+          {/* the page to sign in on, as a link and as text to copy: it shows the same code */}
+          {v.status === 'waiting' && v.url && (
+            <Box flexDirection="column">
+              <Link href={v.url}>{v.url}</Link>
+              <Text dimColor>{`Sign in there and check the page shows ${v.code ?? 'the same code'}.`}</Text>
+            </Box>
+          )}
+          {v.note && <Text dimColor>{v.note}</Text>}
+        </Box>
+      )
+    }
+
     if (!week && !five) {
       return (
         <Box flexDirection="column" gap={1}>
           <Text>No usage limits reported yet.</Text>
           <Text dimColor>They arrive with Claude's next response, on a Pro or Max subscription.</Text>
+          {syncRow(sync)}
         </Box>
       )
     }
@@ -545,6 +664,7 @@ export const register: Register = on => {
           ? block('5-hour window', five, Svg ? cardDrawing(five, '5-hour window') : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
           : <Text dimColor>No active 5-hour window.</Text>}
         {modelsCard}
+        {syncRow(sync)}
       </Box>
     )
   })

@@ -71,12 +71,32 @@ Every response, subagents' included, reports its model, effort and tokens. Betwe
 
 Each model is judged on its own. Its cost shows once the 90% range of its weight is within ±20%. Until then its row shows **Learning** with a meter, and its points this week wait under **Not split yet**. With steady use, Opus usually shows within hours. A cheap model you rarely use, like Haiku in subagents, takes longer.
 
+## Sync across devices
+
+If you use Claude Code on more than one computer, each one only sees the usage it recorded itself; what you did elsewhere shows up as a jump marked "used while away". Sync lets every device see the others' record, so averages, charts, Last window and model costs cover all of your usage. It's off until you sign in.
+
+**Sign in:** at the bottom of the pane, press **Sync across devices · Sign in**. The pane shows a link and a code like `ABCD-EFGH`. Open the link (in a terminal, copy it if it isn't clickable), check that the page shows the same code, and sign in with Google or GitHub. The pane notices within a few seconds and switches to **Synced as you@example.com · last sync 3 min ago**. Do the same on each device, with the same Google or GitHub account (or one with the same verified email).
+
+While signed in, each device uploads what it recorded every 10 minutes (only when something changed) and when a session ends, and downloads what the other devices uploaded. Synced data is kept per Claude account, as the local record is, so switching Claude accounts switches the synced record too. If the server can't be reached, the mod carries on with what it has and tries again later; a short note on the row says so.
+
+**What's sent:** the usage-limit percentages and reset times Claude reports, the times your sessions were getting responses, and for each response its time, model, effort level and token counts. Never your prompts, Claude's replies, code, file names or anything else from your sessions. Your Claude account and organization ids are sent so lists from different Claude accounts stay apart; the server stores only a keyed hash of them. Signing in also sends this computer's name, which the server keeps to list your devices. Your email comes from the Google or GitHub sign-in.
+
+**Where:** a small server on Cloudflare (Workers and D1) at `https://token-range-monitor.micke-dahlgren.workers.dev`. Its privacy policy is at [token-range-monitor.micke-dahlgren.workers.dev/privacy](https://token-range-monitor.micke-dahlgren.workers.dev/privacy).
+
+**How long:** each day's list is deleted 15 days after it was last updated, which is also how far back the mod looks (it learns model costs from the last 14 days). A device unused for 90 days is signed out and removed.
+
+**Sign out or delete:** **Sign out** on the row unlinks this device and removes the other devices' data from this computer; your own record stays. **Delete synced data** (press twice to confirm) deletes your sync account with everything stored on the server and signs this device out. Other devices notice the next time they sync.
+
+**Turn it off:** don't sign in, or sign out. While `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set, sync is off and the row says so.
+
+**Host your own:** the server's code is in [`server/`](server/), with setup steps in its README. Point the mod at it with the plugin's **Sync server** option (in `/config`, or `pluginConfigs` in your settings), then sign in again.
+
 ## Good to know
 
 - **Pro and Max subscriptions only.** API-key usage has no subscription limits to show.
-- **History starts when you install it.** Readings are recorded while a Claude Code session is open, and every session on this computer shares them. Usage on claude.ai or another device shows up as a jump at the next reading.
+- **History starts when you install it.** Readings are recorded while a Claude Code session is open, and every session on this computer shares them. Usage on claude.ai, or on another device unless you [sync](#sync-across-devices), shows up as a jump at the next reading. The record keeps the last 15 days.
 - **It keeps one history per account.** Limits belong to the signed-in account and organization, so signing in to another account switches to that account's own history.
-- **Your data stays on your computer,** in the mod's own storage in your Claude Code configuration folder. Nothing is sent anywhere. The drawings load the IBM Plex fonts from Google Fonts, and use your system's font where they can't.
+- **Your data stays on your computer** unless you sign in to [sync](#sync-across-devices). It's kept in the mod's own storage in your Claude Code configuration folder. The drawings load the IBM Plex fonts from Google Fonts, and use your system's font where they can't.
 - **Built on Claude Code's early-access mod API.** A Claude Code update may change that API and break the mod before it's updated.
 
 ## Development

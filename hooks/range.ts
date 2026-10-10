@@ -11,8 +11,11 @@ const KIND = { five: 0, week: 1 } as const
 const SPAN = { five: 5 * HOUR, week: 7 * DAY }
 /** How far back one reading's increase is spread when readings are far apart. */
 const SPREAD = 10 * MIN
-/** Readings older than this are dropped: enough for a 2-week window plus slack. */
-export const KEEP = 22 * DAY
+/**
+ * Readings older than this are dropped: the models learn from the last 14 days, plus a day of slack.
+ * The sync server keeps a day's list as long, so a device sees the same span of every other device.
+ */
+export const KEEP = 15 * DAY
 
 export const DEFAULT_SETTINGS: RangeSettings = { mode: 'reset', n: 1, unit: 'd', fine: false }
 export const UNIT_HOURS = { h: 1, d: 24, w: 168 } as const

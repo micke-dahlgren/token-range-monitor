@@ -27,8 +27,24 @@ export type Palette = {
 /** The card's palettes for a dark and a light appearance, derived from the theme, and which one the theme itself is. */
 export type Palettes = { dark: Palette; light: Palette; own: 'dark' | 'light' }
 
+/**
+ * What the pane's "Sync across devices" row shows: off (the person turned nonessential traffic off), signed out,
+ * waiting for a sign-in in the browser (its code and page), or signed in (as whom, when it last synced);
+ * a quiet note for what went wrong, and whether a delete is waiting for its confirming press.
+ */
+export type RangeSync = {
+  status: 'off' | 'signedOut' | 'waiting' | 'signedIn'
+  email?: string
+  last?: number
+  code?: string
+  url?: string
+  note?: string
+  confirmDelete?: boolean
+  busy?: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'token-range-monitor': { readings: RangeReading[]; seen: RangeWatch[]; steps: RangeStep[]; settings: RangeSettings; tick: number; palettes: Palettes }
+    'token-range-monitor': { readings: RangeReading[]; seen: RangeWatch[]; steps: RangeStep[]; settings: RangeSettings; tick: number; palettes: Palettes; sync: RangeSync }
   }
 }

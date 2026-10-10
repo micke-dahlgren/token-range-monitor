@@ -4,6 +4,8 @@ import type { RangeReading } from '../types'
 import { DAY, HOUR } from '../hooks/range'
 
 const T0 = Date.UTC(2026, 9, 9, 15, 0)
+/** A path as the hooks module wrote it: the engine may hand it on in the platform's own spelling (backslashes and a drive on Windows). */
+const norm = (p: string) => p.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
 const weekReset = T0 + 3 * DAY + 17 * HOUR
 const fiveReset = T0 + 2 * HOUR
 
@@ -15,9 +17,9 @@ test("the record is the signed-in account's: an older record moves under it, ano
   const clock = mock.clock(on, { now: T0 })
   let signedIn = 'me'
   on('fs.read', ($, e, next) =>
-    e.path === '/home/t/.claude.json' ? { value: JSON.stringify({ oauthAccount: { accountUuid: signedIn, organizationUuid: 'org' } }) } : next(e))
+    norm(e.path) === '/home/t/.claude.json' ? { value: JSON.stringify({ oauthAccount: { accountUuid: signedIn, organizationUuid: 'org' } }) } : next(e))
   // the config file's modified time changes with each sign-in, as Claude Code rewrites it
-  on('fs.stat', ($, e, next) => (e.path === '/home/t/.claude.json'
+  on('fs.stat', ($, e, next) => (norm(e.path) === '/home/t/.claude.json'
     ? { value: { kind: 'file', size: 1, mtimeMs: signedIn === 'me' ? 1 : 2, isLink: false } }
     : next(e)) as never)
   on('session.usage', () => ({ value: { rateLimits: [] } }) as never)
@@ -58,14 +60,14 @@ test("another copy's store (a marketplace install beside a dev copy) is read too
   mock.env(on, { HOME: '/home/t' })
   mock.clock(on, { now: T0 })
   const stores = '/home/t/.claude/plugins/store'
-  on('fs.list', ($, e, next) => (e.path === stores
+  on('fs.list', ($, e, next) => (norm(e.path) === stores
     ? { value: [{ name: 'token-range-monitor_market-1.json', kind: 'file', size: 1, mtimeMs: 0, isLink: false }, { name: 'other-plugin_x.json', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] }
     : next(e)) as never)
   on('fs.read', ($, e, next) =>
-    e.path === '/home/t/.claude.json' ? { value: JSON.stringify({ oauthAccount: { accountUuid: 'me', organizationUuid: 'org' } }) }
-    : e.path === `${stores}/token-range-monitor_market-1.json` ? { value: JSON.stringify({ 'r:abc': fiveHour, settings: {} }) }
+    norm(e.path) === '/home/t/.claude.json' ? { value: JSON.stringify({ oauthAccount: { accountUuid: 'me', organizationUuid: 'org' } }) }
+    : norm(e.path) === `${stores}/token-range-monitor_market-1.json` ? { value: JSON.stringify({ 'r:abc': fiveHour, settings: {} }) }
     : next(e))
-  on('fs.stat', ($, e, next) => (e.path === '/home/t/.claude.json' ? { value: { kind: 'file', size: 1, mtimeMs: 1, isLink: false } } : next(e)) as never)
+  on('fs.stat', ($, e, next) => (norm(e.path) === '/home/t/.claude.json' ? { value: { kind: 'file', size: 1, mtimeMs: 1, isLink: false } } : next(e)) as never)
   on('session.usage', () => ({ value: { rateLimits: [] } }) as never)
   on('command.register', () => ({ value: undefined }) as never)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
