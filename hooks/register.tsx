@@ -256,6 +256,7 @@ async function loadAll($: EngineInterface) {
  * usage seen here from usage made elsewhere. Saved at most every 30 seconds.
  */
 let seenSavedAt = 0
+let seenShownAt = 0
 async function watch($: EngineInterface) {
   const now = await $.clock.now()
   if (!ownKey) ownKey = newOwnKey(now)
@@ -265,11 +266,16 @@ async function watch($: EngineInterface) {
     seenSavedAt = now
     await $.store.set(seenKeyOf(ownKey), ownSeen)
   }
-  await update($, seen, () => [...othersSeen, ...ownSeen])
+  // a redraw for a new span, else at most every 30 seconds: each response would redraw the pane otherwise
+  if (ownSeen.length !== before || now - seenShownAt >= 30_000) {
+    seenShownAt = now
+    await update($, seen, () => [...othersSeen, ...ownSeen])
+  }
 }
 
 /** Notes one response: its model, effort and weighted tokens. Saved at most every 30 seconds. */
 let stepsSavedAt = 0
+let stepsShownAt = 0
 let stepsUnsaved = false
 async function record($: EngineInterface, step: RangeStep) {
   const now = step[0]
@@ -277,7 +283,11 @@ async function record($: EngineInterface, step: RangeStep) {
   ownSteps = [...ownSteps.filter(s => s[0] >= now - KEEP), step]
   stepsUnsaved = true
   if (now - stepsSavedAt > 30_000) await saveSteps($, now)
-  await update($, steps, list => [...list, step])
+  // the models card follows at most every 30 seconds, not on every response: the minute's loadAll catches up the rest
+  if (now - stepsShownAt >= 30_000) {
+    stepsShownAt = now
+    await update($, steps, () => mergeSteps([othersSteps, ownSteps], now))
+  }
 }
 async function saveSteps($: EngineInterface, now: number) {
   if (!stepsUnsaved || !ownKey) return
@@ -344,7 +354,9 @@ async function models($: EngineInterface) {
   const s = await read($, settings)
   const pal = await read($, palettes)
   await read($, tick)
-  const now = await $.clock.now()
+  // the drawings' time, up to the next whole minute: a redraw with nothing new (a scroll, a response, the minute's tick)
+  // then draws the very same drawings, which the surface keeps instead of loading them again (that flashed)
+  const now = Math.ceil((await $.clock.now()) / MIN) * MIN
   const weekRecorded = recordedHours(list, 'week', now)
   const weekAvg = chosenAverage(s)
   // the 5-hour average runs from the window's opening: Anthropic's own figure, and the chart shows the whole window
@@ -509,6 +521,8 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button, Link } = els
     const sync = await read($, syncView)
+    // the real time for the sync row's texts: `now` is the drawings', rounded up to the minute
+    const clockNow = await $.clock.now()
     // the terminal draws no Svg: there the cards are text
     const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
     // both cards fit the pane: charts drawn at its width, sharing the height that's left
@@ -527,8 +541,9 @@ export const register: Register = (on, options) => {
 
     // one dark card per limit, as on the car's display: head, chart, controls, then the notes
     // every drawing in a frame as wide as the card, given its height: it fills the width, and its text keeps its size
-    const Draw = ({ svg, alt }: { svg: string; alt: string }) =>
-      Svg ? <Svg source={svg} height={drawingHeight(svg)} isInteractive alt={alt} /> : null
+    // a plain function, not a component, and each drawing keyed: the surface then updates a drawing in place
+    const draw = (key: string, svg: string, alt: string) =>
+      Svg ? <Svg key={key} source={svg} height={drawingHeight(svg)} isInteractive alt={alt} /> : null
     // `chart` may hold the head too (a card with its last window): then no separate head is drawn
     const block = (title: string, m: Model, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
       const headInChart = !!chart?.includes('class="info"')
@@ -547,10 +562,8 @@ export const register: Register = (on, options) => {
         {/* the countdown is drawn in the head, at its right, so its text takes the drawing's styles */}
         {!headInChart && <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
           {Svg ? (
-            <Draw
-              svg={headerSvg(m, title, size.width, pal, resetsIn(m, s.fine))}
-              alt={`${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}
-            />
+            draw(`head-${m.kind}`, headerSvg(m, title, size.width, pal, resetsIn(m, s.fine)),
+              `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`)
           ) : (
             <Box flexDirection="column">
               <Text bold>{title}</Text>
@@ -572,16 +585,13 @@ export const register: Register = (on, options) => {
         {/* the chart and its controls are one unit: the controls stay right under the chart */}
         <Box key={`graph-${m.kind}`} flexDirection="column" gap={1}>
           {chart && Svg && (
-            <Draw
-              svg={chart}
-              alt={`${headInChart ? `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}. ${lastAlt(last)}` : ''}${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Average ${rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}`}
-            />
+            draw(`chart-${m.kind}`, chart, `${headInChart ? `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}. ${lastAlt(last)}` : ''}${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Average ${rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}`)
           )}
           {controls}
         </Box>
         <Box flexDirection="column" marginTop={controls ? 1 : 0}>
-          {notes.map(note => (Svg
-            ? <Draw svg={noteSvg(note, size.width, pal)} alt={note} />
+          {notes.map((note, i) => (Svg
+            ? draw(`note-${m.kind}-${i}`, noteSvg(note, size.width, pal), note)
             : <Text color="inactive">{note}</Text>))}
         </Box>
       </Box>
@@ -628,14 +638,14 @@ export const register: Register = (on, options) => {
           // a column like the card's own, so a part left out (no baseline, no spend yet) is simply not there
           <Box flexDirection="column" gap={1}>
             {/* the head's info circle opens its tooltip over the rows: head and rows are one drawing */}
-            <Draw svg={withInfo(modelsHead(learned, now, pal), modelsCosts(learned, base, size.width, pal), MODELS_INFO, size.width, pal, 'What do these figures mean?')} alt={`Models. ${modelsText(learned, base, null).join(' ')}`} />
+            {draw('models-head', withInfo(modelsHead(learned, now, pal), modelsCosts(learned, base, size.width, pal), MODELS_INFO, size.width, pal, 'What do these figures mean?'), `Models. ${modelsText(learned, base, null).join(' ')}`)}
             {base && (
               <Box flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={1} rowGap={1}>
                 <Text color="inactive">Compare with</Text>
                 {shown.map(m => seg(`base-${m.id}`, names.get(m.id) ?? m.name, m === base, () => void choose($, { baseline: m.id })))}
               </Box>
             )}
-            {sp && <Draw svg={modelsSpend(sp, size.width, pal)} alt={modelsText({ ...learned, models: [] }, null, sp).join(' ')} />}
+            {sp && draw('models-spend', modelsSpend(sp, size.width, pal), modelsText({ ...learned, models: [] }, null, sp).join(' '))}
           </Box>
         ) : (
           <Box flexDirection="column">
@@ -660,7 +670,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
             {v.status === 'signedIn'
               ? [
-                  <Text key="who" color="inactive">{`Synced as ${v.email || 'you'} · last sync ${agoText(v.last, now)} ·`}</Text>,
+                  <Text key="who" color="inactive">{`Synced as ${v.email || 'you'} · last sync ${agoText(v.last, clockNow)} ·`}</Text>,
                   <Button key="sync-signout" label="Sign out" dimColor={!!v.busy} onPress={() => void signOut(syncIO($))} />,
                   <Button key="sync-delete" label={v.confirmDelete ? 'Press again to delete all synced data' : 'Delete synced data'}
                     variant={v.confirmDelete ? 'primary' : 'secondary'} dimColor={!!v.busy} onPress={() => void deleteSynced(syncIO($))} />,
@@ -684,7 +694,7 @@ export const register: Register = (on, options) => {
                   {d.current
                     ? [<Text key="name">{`${deviceLabel(d)} · this device`}</Text>]
                     : [
-                        <Text key="name">{`${deviceLabel(d)} · last seen ${d.lastSeenAt === undefined ? 'never' : agoText(d.lastSeenAt, now)} ·`}</Text>,
+                        <Text key="name">{`${deviceLabel(d)} · last seen ${d.lastSeenAt === undefined ? 'never' : agoText(d.lastSeenAt, clockNow)} ·`}</Text>,
                         <Button key={`sync-remove-${d.id}`}
                           label={v.confirmRemove === d.id ? `Press again to remove ${deviceLabel(d)} and its synced data` : 'Remove'}
                           variant={v.confirmRemove === d.id ? 'primary' : 'secondary'} dimColor={!!v.busy}
