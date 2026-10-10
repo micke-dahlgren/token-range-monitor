@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, increments, lastWindow, lastWindowNote, lastWindowText, isWatched, needsMore, refine, parseWindow, project, resetsIn, signed, spreadLabels, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, increments, lastWindow, lastWindowNote, lastWindowText, isWatched, needsMore, refine, parseWindow, project, resetsIn, signed, bandPart, bandWidth, paceText, spreadLabels, usedBetween } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
 
@@ -96,18 +96,36 @@ test("a 5-hour window just installed into averages from Anthropic's figure since
   expect(project([[T0, 0, 3, T0 + 4 * HOUR + 50 * MIN]], 'five', T0, { type: 'reset' })!.noData).toMatch(/after the 5-hour window opened/)
 })
 
-test('reset countdown switches units', async () => {
+test('the weekly countdown reads in days and hours', async () => {
   const m = project(week([[1, 10], [0, 12]]), 'week', T0, hours(24))!
-  expect(resetsIn(m, false)).toBe('Resets in 3.7 days')
-  expect(resetsIn(m, true)).toBe('Resets in 89 hours')
+  expect(resetsIn(m)).toBe('Resets in 3d 17h')
 })
 
-test("the 5-hour countdown reads in hours, and in minutes under an hour", async () => {
+test("the 5-hour countdown reads in hours and minutes, and in minutes under an hour", async () => {
   const five = (left: number) => project([[T0 - HOUR, 0, 10, T0 + left * HOUR], [T0, 0, 12, T0 + left * HOUR]], 'five', T0, { type: 'reset' })!
-  expect(resetsIn(five(2.5), false)).toBe('Resets in 2.5 hours')
-  expect(resetsIn(five(2.5), true)).toBe('Resets in 150 minutes')
-  expect(resetsIn(five(0.4), false)).toBe('Resets in 24 minutes')
-  expect(resetsIn(five(1 / 60), false)).toBe('Resets in 1 minute')
+  expect(resetsIn(five(2.5))).toBe('Resets in 2h 30m')
+  expect(resetsIn(five(2))).toBe('Resets in 2h')
+  expect(resetsIn(five(0.4))).toBe('Resets in 24m')
+})
+
+test('the band: run-out time when over, else what is left; a short form for narrow columns', async () => {
+  const five = (pct: number) => project([[T0 - HOUR, 0, 0, T0 + 4 * HOUR], [T0, 0, pct, T0 + 4 * HOUR]], 'five', T0, { type: 'reset' })!
+  // 10% an hour, 4 hours to go: 50% used at the reset
+  const ok = five(10)
+  expect(bandPart(ok, false)).toEqual({ label: '5h', value: '50% to spare', rest: ', resets in 4h' })
+  expect(bandPart(ok, true)).toEqual({ label: '5h', value: '+50%', rest: ' 4h' })
+  // 40% an hour: out after 1h 30m, 2h 30m before the reset
+  const over = five(40)
+  expect(bandPart(over, false)).toEqual({ label: '5h', value: 'runs out in 1h 30m', rest: ', 2h 30m early' })
+  expect(bandPart(over, true)).toEqual({ label: '5h', value: 'out in 1h 30m', rest: '' })
+  expect(bandWidth([over], true)).toBeLessThan(bandWidth([over], false))
+})
+
+test('your pace against the safe pace, in words', async () => {
+  const five = (pct: number) => project([[T0 - HOUR, 0, 0, T0 + 4 * HOUR], [T0, 0, pct, T0 + 4 * HOUR]], 'five', T0, { type: 'reset' })!
+  // 40% an hour against 60% over 4 hours, 15% an hour
+  expect(paceText(five(40))).toBe('Your pace is 2.7× the safe pace.')
+  expect(paceText(five(10))).toBe('Your pace is 0.4× the safe pace.')
 })
 
 test('window text parses', async () => {
@@ -186,7 +204,7 @@ test('the last 5-hour window that ended under the limit shows what was left', as
   expect(l.resetsAt).toBe(prev)
   expect(l.ranOutAt).toBe(null)
   expect(l.left).toBe(28)
-  expect(lastWindowText(l)).toBe('+28%')
+  expect(lastWindowText(l)).toBe('28% to spare')
   expect(lastWindowNote(l)).toBe('It ended at 72% used.')
 })
 
@@ -198,7 +216,7 @@ test('a 5-hour window that ran out early shows how much more it would have neede
   expect(l.usedH).toBe(4)
   expect(l.lockedH).toBe(1)
   expect(l.left).toBe(-25)
-  expect(lastWindowText(l)).toBe('−25%')
+  expect(lastWindowText(l)).toBe('25% short')
   expect(lastWindowNote(l)).toBe('It ran out 1h before its reset, after 4h of use.')
 })
 
@@ -211,13 +229,13 @@ test('the last window hides when the record cannot say how it ended', async () =
   const early = fiveWin(prev, [[30, 20], [180, 60]])
   expect(lastWindow(early, 'five', T0)).toBe(null)
   // ...unless this computer watched to the end, so nothing more came in
-  expect(lastWindowText(lastWindow(early, 'five', T0, [[prev - 3 * HOUR, prev]])!)).toBe('+40%')
+  expect(lastWindowText(lastWindow(early, 'five', T0, [[prev - 3 * HOUR, prev]])!)).toBe('40% to spare')
   // the first reading was already 100%: when it ran out isn't known
   expect(lastWindow(fiveWin(prev, [[200, 100], [290, 100]]), 'five', T0)).toBe(null)
   // a long unwatched gap before reaching 100%
   expect(lastWindow(fiveWin(prev, [[30, 40], [240, 100]]), 'five', T0)).toBe(null)
   // a 30-minute tail is close enough
-  expect(lastWindowText(lastWindow(fiveWin(prev, [[30, 40], [271, 55]]), 'five', T0)!)).toBe('+45%')
+  expect(lastWindowText(lastWindow(fiveWin(prev, [[30, 40], [271, 55]]), 'five', T0)!)).toBe('45% to spare')
 })
 
 test('the last weekly window: ended under the limit, or ran out a day early', async () => {
@@ -226,12 +244,12 @@ test('the last weekly window: ended under the limit, or ran out a day early', as
   const current: RangeReading[] = [[T0 - DAY, 1, 8, cur], [T0, 1, 15, cur]]
   // last read 10 hours before its reset, within the last 10% of the week
   const under: RangeReading[] = [[prev - 3 * DAY, 1, 40, prev], [prev - 10 * HOUR, 1, 81, prev]]
-  expect(lastWindowText(lastWindow([...under, ...current], 'week', T0)!)).toBe('+19%')
+  expect(lastWindowText(lastWindow([...under, ...current], 'week', T0)!)).toBe('19% to spare')
   // 100% after six days is 16.7%/day; the day locked out would have needed about 17% more
   const out: RangeReading[] = [[prev - 3 * DAY, 1, 60, prev], [prev - DAY - 3 * HOUR, 1, 99, prev], [prev - DAY, 1, 100, prev]]
   const l = lastWindow([...out, ...current], 'week', T0)!
   expect(l.lockedH).toBe(24)
-  expect(lastWindowText(l)).toBe('−17%')
+  expect(lastWindowText(l)).toBe('17% short')
   // read two days before its reset, and not watched since: hidden
   expect(lastWindow([[prev - 2 * DAY, 1, 70, prev], ...current], 'week', T0)).toBe(null)
 })
@@ -246,9 +264,9 @@ test('the last window is the latest one to have reset, its stale readings left o
     [prev + 5 * MIN, 0, 99, prev],
     ...fiveWin(T0 + 4 * HOUR, [[20, 3]]),
   ]
-  expect(lastWindowText(lastWindow(readings, 'five', T0)!)).toBe('+36%')
+  expect(lastWindowText(lastWindow(readings, 'five', T0)!)).toBe('36% to spare')
   // before that window reset, the one before it was the last
-  expect(lastWindowText(lastWindow(readings, 'five', prev - 30 * MIN)!)).toBe('+10%')
+  expect(lastWindowText(lastWindow(readings, 'five', prev - 30 * MIN)!)).toBe('10% to spare')
 })
 
 test('the head shows the last window quietly, its caption ending in an info circle', async () => {
@@ -257,7 +275,7 @@ test('the head shows the last window quietly, its caption ending in an info circ
   const m = project(readings, 'five', T0, { type: 'reset' })!
   const head = headerDraw(m, '5-hour window', 700, undefined, '', lastWindow(readings, 'five', T0))
   expect(head.svg).toContain('>Last window<')
-  expect(head.svg).toMatch(/fill-opacity="0.7"[^>]*>\+28%</)
+  expect(head.svg).toMatch(/fill-opacity="0.7"[^>]*>28% to spare</)
   expect(head.info).toBeDefined()
   // without one, no fourth figure and no circle
   const plain = headerDraw(m, '5-hour window', 700, undefined, '')

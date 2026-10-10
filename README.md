@@ -28,17 +28,18 @@ claude plugin update token-range-monitor
 
 **Above the prompt**, one line:
 
-> Left at week reset **−25%** · Resets in 3.7 days · Left at 5h reset **+12%** · Resets in 2.4 hours · Details
+> Week **runs out in 2d 9h**, 1d 7h early · 5h **21% to spare**, resets in 2h 24m · Details
 
-- **Left at reset** is what's projected to remain of the limit when it resets, at your current rate. A positive value (green) means you'll make it with that much to spare. A negative value (red) means you'd need that much more than you have.
-- Click **Resets in…** to switch between days and hours (or hours and minutes for the 5-hour window). Under an hour, the 5-hour countdown is in minutes.
+- For a limit you'll make it to the reset on, it shows what's projected to be left when it resets, at your current pace, in green: **21% to spare**.
+- For a limit you won't, it shows in red when you'd run out, counted from now, and how long before the reset that is.
+- In a narrow terminal it shortens to stay on one line: `Week out in 2d 9h · 5h +21% 2h 24m · Details`.
 - **Details** opens the pane.
 
 **The pane** has one card per limit, showing:
 
-- **Left at reset**, **Average** (your usage rate) and **Limit** (the highest rate you can keep up until the reset without running out). When you're over, it also says when you'd run out.
-- **Last window**, small and dim beside them: how the previous window of that limit ended, in the same terms as Left at reset. **+28%** means it reset with 28% unused. A negative value means it ran out early, and is how much more you'd have needed for the time you were locked out, at the rate you'd used it until then. It only shows when the record covers that window's end.
-- A chart of your usage over the averaging window, ending at *Now*. The dotted line is your average and the solid line is the limit. If the dotted line is above the solid one, you'll run out before the reset.
+- **At reset** (what's projected to be left, "21% to spare" or "23% short"), **Your pace** (your average usage rate) and **Safe pace** (the highest rate you can keep up until the reset without running out). When you're over, it also says when you'd run out. In the terminal, where there's no chart, a line compares the two: "Your pace is 1.5× the safe pace."
+- **Last window**, small and dim beside them: how the previous window of that limit ended, in the same terms as At reset. **28% to spare** means it reset with 28% unused. **Short** means it ran out early, and is how much more you'd have needed for the time you were locked out, at the pace you'd used it until then. It only shows when the record covers that window's end.
+- A chart of your usage over the averaging window, ending at *Now*. The dotted line is your pace and the solid line is the safe pace. If the dotted line is above the solid one, you'll run out before the reset.
 - Bars are usage seen as it happened. Anthropic reports each limit in whole percents, so each rise is shared among the responses made since the previous one, by their size. That way the bars follow your actual work and don't all come out one percent high. Stretches the plugin didn't see (before it was installed, or while no session here was getting responses) show as one low block labelled with what's known, like "12% used while away, 9h".
 - For the weekly limit, a choice of what the average covers:
   - **Since reset** (the default): your usage since the weekly reset, from Anthropic's own figure. It needs no recorded history, so it works right after you install.
@@ -47,7 +48,7 @@ claude plugin update token-range-monitor
 A third card, **Models**, shows what each model costs and where your week went:
 
 - **Cost** compares each model token for token with a baseline you pick under **Compare with** (Sonnet by default). "Opus 4.7×" means the same tokens on Opus use 4.7 times as much of your limit as on Sonnet, whether it's a quick answer or a long agentic run. The likely range is shown beneath.
-- **This week** splits the points of your weekly limit by model and effort level. Higher effort means more thinking tokens, so it shows here, not in the cost. Usage the plugin didn't see stays apart as **Not recorded**.
+- **This week** splits the % of your weekly limit by model and effort level. Higher effort means more thinking tokens, so it shows here, not in the cost. Usage the plugin didn't see stays apart as **Not recorded**.
 
 Open the pane with `/token-range`. You can also set the window from the prompt: `/token-range 2d`, `/token-range 12h` or `/token-range reset`.
 
@@ -56,7 +57,7 @@ Open the pane with `/token-range`. You can also set the window from the prompt: 
 Each limit's percentage and reset time arrive with Claude's responses. The mod records them and works out your usage rate over the chosen window:
 
 - **Projected left at reset** = 100% − (used now + rate × time until reset)
-- **Limit** = what's left ÷ time until reset
+- **Safe pace** = what's left ÷ time until reset
 
 The mod shows **No data** rather than a misleading number when there isn't enough behind the average:
 

@@ -216,6 +216,8 @@ export function spend(week: Model, l: Learned, steps: readonly RangeStep[], now:
 const comma = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+$)/, ',')
 const times = (x: number) => (x >= 1 ? x.toFixed(1) : x.toFixed(2)) + '×'
 const one = (n: number) => n.toFixed(1).replace(/\.0$/, '')
+/** A share of the weekly limit: "41.2%". */
+const pc = (n: number) => `${one(n)}%`
 
 /** A model's cost against the baseline, and its likely range. */
 export function ratio(m: ModelCost, b: ModelCost): { x: string; range: string } {
@@ -227,7 +229,7 @@ const responsesText = (m: ModelCost) =>
   `${comma(m.responses)} ${m.responses === 1 ? 'response' : 'responses'}${m.sub === m.responses && m.sub > 0 ? ', all subagents' : m.sub > m.responses / 2 ? ', mostly subagents' : ''}`
 
 /** The tooltip on the card's ⓘ. */
-export const MODELS_INFO = 'Cost: how much of your limit each model uses token for token, compared with the model you pick. Learned from your history; shown once it’s within ±20%. This week: points of the weekly limit that went to each model, by effort.'
+export const MODELS_INFO = 'Cost: how much of your limit each model uses token for token, compared with the model you pick. Learned from your history; shown once it’s within ±20%. This week: the % of the weekly limit that went to each model, by effort.'
 
 /** The card in words, for a reader that can't see it and for surfaces without drawings. */
 export function modelsText(l: Learned, b: ModelCost | null, sp: Spend | null): string[] {
@@ -240,9 +242,9 @@ export function modelsText(l: Learned, b: ModelCost | null, sp: Spend | null): s
   })
   if (sp) {
     rows.push(`This week ${Math.round(sp.week)}% used: ${[
-      ...sp.models.map(m => `${m.cost.name} ${one(m.pts)} (${m.effort.map(([e, v]) => `${e} ${one(v)}`).join(', ')})`),
-      ...(sp.unsplit ? [`not split yet ${one(sp.unsplit)}`] : []),
-      `not recorded ${one(sp.away)}`,
+      ...sp.models.map(m => `${m.cost.name} ${pc(m.pts)} (${m.effort.map(([e, v]) => `${e} ${pc(v)}`).join(', ')})`),
+      ...(sp.unsplit ? [`not split yet ${pc(sp.unsplit)}`] : []),
+      `not recorded ${pc(sp.away)}`,
     ].join(', ')}.`)
   }
   return rows
@@ -334,7 +336,7 @@ export function modelsCosts(l: Learned, b: ModelCost | null, width: number, pal:
 /** This week's points: a bar split by model and effort, each model's efforts as chips, and what isn't split or wasn't recorded. */
 export function modelsSpend(sp: Spend, width: number, pal: Palettes = DEFAULT_PALETTES): string {
   let s = '', y = 14
-  const head = `This week · ${Math.round(sp.week)}% of limit used`, sub = 'points of the weekly limit, by model and effort'
+  const head = `This week · ${Math.round(sp.week)}% of limit used`, sub = '% of the weekly limit, by model and effort'
   s += t(0, y, head, { size: LABEL, weight: 500, mono: true, fill: C.dim })
   if (head.length * LABEL * 0.6 + tw(sub, 12) + 16 <= width) s += t('100%', y, sub, { size: 12, fill: C.dim, anchor: 'end' })
   else { y += 17; s += t(0, y, sub, { size: 12, fill: C.dim }) }
@@ -360,18 +362,18 @@ export function modelsSpend(sp: Spend, width: number, pal: Palettes = DEFAULT_PA
   for (const m of sp.models) {
     s += rule(y)
     const hy = y + 20
-    s += dot(0, hy - 4.5, colorOf(m.cost.family)) + t(17, hy, m.cost.name, { size: 13.5, weight: 500 }) + t('100%', hy, one(m.pts), { size: 13, weight: 500, mono: true, anchor: 'end' })
+    s += dot(0, hy - 4.5, colorOf(m.cost.family)) + t(17, hy, m.cost.name, { size: 13.5, weight: 500 }) + t('100%', hy, pc(m.pts), { size: 13, weight: 500, mono: true, anchor: 'end' })
     let cx = 17, cy = hy + 9
     for (const [e, v] of m.effort) {
-      const a = one(v), share = `${Math.round(v / (m.pts || 1) * 100)}%`
-      const w = 8 + 8 + 6 + tw(e, 12.5) + 6 + tw(a, 12, true) + 6 + tw(share, 11.5, true) + 8
+      // the figure only: a second percent (its share of the model) would be a different kind of %
+      const a = pc(v)
+      const w = 8 + 8 + 6 + tw(e, 12.5) + 6 + tw(a, 12, true) + 8
       if (cx > 17 && cx + w > width) { cx = 17; cy += 28 }
       let x = cx + 8
       s += `<rect x="${cx.toFixed(1)}" y="${cy}" width="${w.toFixed(1)}" height="22" rx="5" style="fill:${C.dim}" fill-opacity="0.12"/>`
       s += dot(x, cy + 11, colorOf(m.cost.family), 8, shade(e)); x += 14
       s += t(x, cy + 15.5, e, { size: 12.5 }); x += tw(e, 12.5) + 6
-      s += t(x, cy + 15.5, a, { size: 12, weight: 500, mono: true }); x += tw(a, 12, true) + 6
-      s += t(x, cy + 15.5, share, { size: 11.5, mono: true, fill: C.dim })
+      s += t(x, cy + 15.5, a, { size: 12, weight: 500, mono: true })
       cx += w + 6
     }
     y = cy + 22 + 7
@@ -389,12 +391,12 @@ export function modelsSpend(sp: Spend, width: number, pal: Palettes = DEFAULT_PA
     const col = i % cols, row = Math.floor(i / cols), ly = y + 14 + row * 22
     const x0 = col / cols, x1 = (col + 1) / cols
     s += at(x0, `<g transform="translate(${col ? 7 : 0},${ly - 4.5})">${g.sw}</g>` + t(col ? 24 : 17, ly, g.label, { size: 13, fill: C.dim }))
-    s += at(x1, t(col < cols - 1 ? -7 : 0, ly, one(g.v), { size: 13, weight: 500, mono: true, fill: C.dim, anchor: 'end' }))
+    s += at(x1, t(col < cols - 1 ? -7 : 0, ly, pc(g.v), { size: 13, weight: 500, mono: true, fill: C.dim, anchor: 'end' }))
   })
   y += 14 + Math.ceil(legend.length / cols) * 22 - 14
 
   if (!sp.models.length) {
-    const note = `No model’s cost is known yet, so this week can’t be split. The ${one(sp.unsplit)} points recorded here will split once a model’s figure shows.`
+    const note = `No model’s cost is known yet, so this week can’t be split. The ${pc(sp.unsplit)} of the week recorded here will split once a model’s figure shows.`
     const lines = wrapAt(note, width - 26, 13)
     const H = lines.length * 19 + 16
     y += 14

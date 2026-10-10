@@ -363,11 +363,11 @@ export function lastWindow(readings: readonly RangeReading[], kind: Kind, now: n
 
 /** The caption of the last window's figure. */
 export const LAST_LABEL = 'Last window'
-export const lastWindowText = (l: LastWindow) => signed(l.left)
+export const lastWindowText = (l: LastWindow) => spare(l.left)
 /** Whether it reads as short: by the rounded figure, so the colour matches the sign shown. */
 export const lastIsShort = (l: LastWindow) => Math.round(l.left) < 0
 /** What Last window means: the info circle's tooltip. */
-export const LAST_INFO = 'Last window is what was left of this limit when its previous window reset. Negative means it ran out early: how much more you would have needed for the rest of that window, at the rate you used it until then.'
+export const LAST_INFO = 'Last window is what was left of this limit when its previous window reset. Short means it ran out early: how much more you would have needed for the rest of that window, at the pace you used it until then.'
 /** How this one ended, in words. */
 export function lastWindowNote(l: LastWindow): string {
   if (l.ranOutAt === null) return `It ended at ${Math.round(l.pct)}% used.`
@@ -377,6 +377,8 @@ export function lastWindowNote(l: LastWindow): string {
 // ---- words ----
 
 export const signed = (x: number) => (Math.round(x) >= 0 ? '+' : '−') + Math.abs(Math.round(x)) + '%'
+/** What's left of a limit, in words: "21% to spare", or "23% short" where it runs out. */
+export const spare = (x: number) => `${Math.abs(Math.round(x))}% ${Math.round(x) >= 0 ? 'to spare' : 'short'}`
 export const fx = (v: number, d = 1) => v.toFixed(d)
 
 export function dur(h: number): string {
@@ -390,14 +392,8 @@ export function dur(h: number): string {
   return `${Math.max(0, Math.round(h * 60))}m`
 }
 
-/** "Resets in 3.7 days" / "Resets in 89 hours", and for the 5-hour window hours / minutes. */
-export function resetsIn(m: Model, fine: boolean): string {
-  if (m.kind === 'week') return fine ? `Resets in ${Math.round(m.left)} hours` : `Resets in ${fx(m.left / 24)} days`
-  // under an hour, hours read as "0.4 hours": minutes then, whichever unit was picked
-  const minutes = Math.round(m.left * 60)
-  if (fine || m.left < 1) return `Resets in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`
-  return `Resets in ${fx(m.left)} hours`
-}
+/** "Resets in 3d 17h", "Resets in 2h 24m", "Resets in 38m": exact at any distance, so no unit to pick. */
+export const resetsIn = (m: Model) => `Resets in ${dur(m.left)}`
 
 /** The name of an average, as its button shows it. */
 export const averageName = (avg: Average) =>
@@ -428,12 +424,40 @@ const tooShort = (kind: Kind) =>
 
 export const runsOut = (m: Model) => `Runs out in ${dur(m.runsOutIn)}, ${dur(m.early)} early`
 
-/** What's projected to be left at the reset, or "No data" without an estimate. */
-export const leftText = (m: Model) => (m.noData ? 'No data' : signed(m.arrive))
+/** What's projected to be left at the reset, "21% to spare" or "23% short", or "No data" without an estimate. */
+export const leftText = (m: Model) => (m.noData ? 'No data' : spare(m.arrive))
 export const isShort = (m: Model) => m.over && !m.noData
 
+/** One limit's part of the band: its name, the figure in its state's colour, and what follows it. */
+export type BandPart = { label: string; value: string; rest: string }
+/**
+ * Over: when it runs out, from now ("runs out in 2d 9h, 1d 7h early"). Else
+ * what's left at the reset and when that is. `short` is the narrow form:
+ * "out in 2d 9h", or "+21% 2h 24m".
+ */
+export function bandPart(m: Model, short: boolean): BandPart {
+  const label = m.kind === 'week' ? 'Week' : '5h'
+  if (isShort(m)) return short
+    ? { label, value: `out in ${dur(m.runsOutIn)}`, rest: '' }
+    : { label, value: `runs out in ${dur(m.runsOutIn)}`, rest: `, ${dur(m.early)} early` }
+  return short
+    ? { label, value: m.noData ? 'No data' : signed(m.arrive), rest: ` ${dur(m.left)}` }
+    : { label, value: leftText(m), rest: `, resets in ${dur(m.left)}` }
+}
+/** About how many cells the band takes: the parts, the " · " between them, and the Details button. */
+export const bandWidth = (limits: Model[], short: boolean) =>
+  limits.reduce((w, m) => { const p = bandPart(m, short); return w + p.label.length + 1 + p.value.length + p.rest.length }, 0)
+  + Math.max(0, limits.length - 1) * 3 + 1 + 11
+
 export const rateText = (m: Model, perHour: number) =>
-  m.kind === 'week' ? `${fx(perHour * 24)}%/day` : `${fx(perHour)}%/h`
+  m.kind === 'week' ? `${fx(perHour * 24)}% a day` : `${fx(perHour)}% an hour`
+
+/** Your pace against the safe pace, in words: what the chart's two lines show, for where there's no chart. */
+export function paceText(m: Model): string | null {
+  if (m.noData || !(m.limit > 0) || !(m.rate > 0)) return null
+  const x = m.rate / m.limit
+  return `Your pace is ${x >= 10 ? Math.round(x) : fx(x)}× the safe pace.`
+}
 
 // ---- drawing ----
 
@@ -457,19 +481,19 @@ export const TEXT: Record<Role, { rem: number; weight: number; color: PaletteKey
   title: { rem: 1.2, weight: 500, color: 'fg' },
   /** The run-out warning under the title. */
   warning: { rem: 0.85, weight: 400, color: 'over' },
-  /** A figure's caption: "Average", small and mono. */
+  /** A figure's caption: "Your pace", small and mono. */
   caption: { rem: 0.6875, weight: 500, color: 'dim', mono: true },
-  /** A figure: "19.4%/day". */
+  /** A figure: "19.4% a day". */
   figure: { rem: 0.9375, weight: 500, color: 'fg', mono: true },
   /** The axes, the unit line and notes inside the plot. */
   axis: { rem: 0.7, weight: 400, color: 'dim', mono: true },
-  /** The labels on the average and limit lines. */
+  /** The labels on the your-pace and safe-pace lines. */
   line: { rem: 0.8125, weight: 500, color: 'fg', mono: true },
-  /** The reset countdown beside the title: "Resets in 6.1 days". */
+  /** The reset countdown beside the title: "Resets in 6d 2h". */
   countdown: { rem: 0.75, weight: 400, color: 'dim' },
   /** The note under a card: "Average since the reset 23h ago, ...". */
   note: { rem: 0.78, weight: 400, color: 'dim' },
-  /** A quiet figure beside the others, smaller and lighter: "Last window +28%". */
+  /** A quiet figure beside the others, smaller and lighter: "Last window 28% to spare". */
   aside: { rem: 0.8125, weight: 400, color: 'dim', mono: true },
 }
 type Role = 'title' | 'warning' | 'caption' | 'figure' | 'axis' | 'line' | 'countdown' | 'note' | 'aside'
@@ -520,9 +544,9 @@ function headLayout(m: Model, width: number, last?: LastWindow | null) {
     })
   }
   // the left-at-reset figure is coloured by its state; the others take the figure role's colour
-  add(m.kind === 'week' ? 'Left at week reset' : 'Left at 5h reset', m.noData ? 'No data' : signed(m.arrive), m.noData ? C.dim : m.over ? C.bad : C.under)
-  add('Average', m.noData ? 'No data' : rateText(m, m.rate), m.noData ? C.dim : undefined)
-  add('Limit', rateText(m, m.limit), undefined)
+  add(m.kind === 'week' ? 'At week reset' : 'At 5h reset', leftText(m), m.noData ? C.dim : m.over ? C.bad : C.under)
+  add('Your pace', m.noData ? 'No data' : rateText(m, m.rate), m.noData ? C.dim : undefined)
+  add('Safe pace', rateText(m, m.limit), undefined)
   // the last window: smaller and lighter, in left-at-reset's colours but muted, its caption ending in an info circle
   if (last) add(LAST_LABEL, lastWindowText(last), lastIsShort(last) ? C.bad : C.under, { info: true, role: 'aside', opacity: 0.7 })
   // the figures flow left to right, onto another row where the card is too narrow for the next
@@ -719,8 +743,8 @@ export function chartSvg(c: ChartSpec): string {
   // keep the labels clear of each other and inside the plot
   const [lY, aY] = spreadLabels(ya === null ? [yl] : [yl, ya], px('line') + 12, padT + px('line') / 2 + 6, base - px('line') / 2 - 6)
   s += late
-  s += label(lY!, `limit ${fx(c.limit)}${limitOff ? ' ▲' : ''}`, C.limit)
-  if (aY !== undefined && c.avg !== null) s += label(aY, `average ${fx(c.avg)}`)
+  s += label(lY!, `safe pace ${fx(c.limit)}${limitOff ? ' ▲' : ''}`, C.limit)
+  if (aY !== undefined && c.avg !== null) s += label(aY, `your pace ${fx(c.avg)}`)
   return drawing(s, Hh, c.palettes ?? DEFAULT_PALETTES)
 }
 /** The weekly chart for model `m` at `now`. */

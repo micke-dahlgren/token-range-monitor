@@ -4,8 +4,8 @@ import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 import type { RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
-  drawingHeight, emptyChartSvg, emptyChartText, fit, headerDraw, withInfo, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
-  isShort, leftText, refine, runsOut, weekChart, windowHours,
+  emptyChartSvg, emptyChartText, fit, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
+  bandPart, bandWidth, isShort, leftText, paceText, refine, runsOut, weekChart, windowHours,
 } from './range'
 import type { Average, LastWindow, Model } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
@@ -24,6 +24,15 @@ const tick = atom({ plugin: 'token-range-monitor', key: 'tick' } as const, 0)
 const seen = atom({ plugin: 'token-range-monitor', key: 'seen' } as const, [])
 const palettes = atom({ plugin: 'token-range-monitor', key: 'palettes' } as const, DEFAULT_PALETTES)
 const steps = atom({ plugin: 'token-range-monitor', key: 'steps' } as const, [])
+/**
+ * A drawing as a plain image: the drawings are made for a frame (a wide canvas, filled to the frame's width), so as
+ * an image each gets the width it was laid out for and a viewBox, and scales evenly to the width it's shown at.
+ */
+const asImage = (svg: string, width: number) =>
+  svg.replace(/^<svg ([^>]*?)width="\d+" height="(\d+)">/, (_, attrs: string, h: string) =>
+    `<svg ${attrs}width="${Math.round(width)}" height="${h}" viewBox="0 0 ${Math.round(width)} ${h}" preserveAspectRatio="xMidYMin meet">`)
+/** Which cards' Details blocks are open: `week`, `five`, `models`. */
+const details = atom({ plugin: 'token-range-monitor', key: 'details' } as const, [] as string[])
 /** What the pane's sync row shows; sync itself (./sync) keeps it through syncIO. */
 const syncView = atom({ plugin: 'token-range-monitor', key: 'sync' } as const, { status: 'signedOut' } as RangeSync)
 
@@ -382,11 +391,6 @@ async function models($: EngineInterface) {
   }
 }
 
-async function toggleFine($: EngineInterface) {
-  await update($, settings, s => ({ ...s, fine: !s.fine }))
-  await $.store.set('settings', await read($, settings))
-}
-
 async function choose($: EngineInterface, change: Partial<RangeSettings>) {
   await update($, settings, s => ({ ...s, ...change }))
   await $.store.set('settings', await read($, settings))
@@ -489,27 +493,25 @@ export const register: Register = (on, options) => {
   // C: one line above the prompt
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const { now, s, week, five } = await models($)
-    void now
+    const { week, five } = await models($)
     if (!week && !five) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
+    const limits = [week, five].filter((m): m is Model => !!m)
+    // the full line where it fits, else the short one, so the band stays one line in a narrow column
+    const short = bandWidth(limits, false) > e.props.bodyColumns
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center">
-        {week && (
-          <Box flexDirection="row" columnGap={1}>
-            <Text dimColor>Left at week reset</Text>
-            <Text bold dimColor={!!week.noData} color={week.noData ? undefined : week.over ? 'error' : 'success'}>{leftText(week)}</Text>
-            <Button key="reset-week" plain dimColor label={resetsIn(week, s.fine)} onPress={() => toggleFine($)} />
-          </Box>
-        )}
-        {week && five && <Text dimColor>·</Text>}
-        {five && (
-          <Box flexDirection="row" columnGap={1}>
-            <Text dimColor>Left at 5h reset</Text>
-            <Text bold dimColor={!!five.noData} color={five.noData ? undefined : five.over ? 'error' : 'success'}>{leftText(five)}</Text>
-            <Button key="reset-five" plain dimColor label={resetsIn(five, s.fine)} onPress={() => toggleFine($)} />
-          </Box>
-        )}
+        {limits.flatMap((m, i) => {
+          const p = bandPart(m, short)
+          return [
+            ...(i ? [<Text key={`sep-${m.kind}`} dimColor>·</Text>] : []),
+            <Box key={`band-${m.kind}`} flexDirection="row">
+              <Text dimColor>{p.label} </Text>
+              <Text bold dimColor={!!m.noData} color={m.noData ? undefined : m.over ? 'error' : 'success'}>{p.value}</Text>
+              {p.rest && <Text dimColor>{p.rest}</Text>}
+            </Box>,
+          ]
+        })}
         <Button key="details" label="Details" onPress={() => void openPane($)} />
       </Box>
     )
@@ -527,28 +529,36 @@ export const register: Register = (on, options) => {
     const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
     // both cards fit the pane: charts drawn at its width, sharing the height that's left
     const size = fit(e.props.bodyColumns)
-    // a head with the last window carries its info circle, opening a tooltip over the chart: head and chart are one drawing
     const lastOf = (m: Model) => (m.kind === 'week' ? lastWeek : lastFive)
-    const cardDrawing = (m: Model, title: string) => {
-      const chart = emptyChartText(m, now) ? emptyChartSvg(m, now, size.width, pal)
-        : m.kind === 'week' ? weekChart(m, now, size.width, pal, size.weekHeight) : fiveChart(m, now, size.width, pal, size.fiveHeight)
-      const last = lastOf(m)
-      if (!last) return chart
-      const head = headerDraw(m, title, size.width, pal, resetsIn(m, s.fine), last)
-      return withInfo(head, chart, `${LAST_INFO}\n${lastWindowNote(last)}`, size.width, pal, 'What is Last window?')
+    const cardDrawing = (m: Model) => emptyChartText(m, now) ? emptyChartSvg(m, now, size.width, pal)
+      : m.kind === 'week' ? weekChart(m, now, size.width, pal, size.weekHeight) : fiveChart(m, now, size.width, pal, size.fiveHeight)
+    // a card's explanation behind a Details button, a paragraph a line; nothing to say, no button
+    const open = await read($, details)
+    const detailsBlock = (key: string, paragraphs: string[]) => {
+      if (!paragraphs.length) return null
+      const isOpen = open.includes(key)
+      return (
+        <Box key={`details-${key}`} flexDirection="column" gap={1}>
+          <Box flexDirection="row" justifyContent="flex-end">
+            <Button key={`details-btn-${key}`} plain dimColor label={isOpen ? 'Hide details' : 'Details'}
+              onPress={() => void update($, details, l => (l.includes(key) ? l.filter(k => k !== key) : [...l, key]))} />
+          </Box>
+          {isOpen && paragraphs.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
+        </Box>
+      )
     }
+    // the head's figures in words, for a drawing's alt text
+    const figuresText = (m: Model) =>
+      `At reset ${leftText(m)}, your pace ${m.noData ? 'no data' : rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`
     const lastAlt = (last: LastWindow | null) => (last ? `${LAST_LABEL} ${lastWindowText(last)}. ${lastWindowNote(last)} ` : '')
 
     // one dark card per limit, as on the car's display: head, chart, controls, then the notes
-    // every drawing in a frame as wide as the card, given its height: it fills the width, and its text keeps its size
-    // a plain function, not a component, and each drawing keyed: the surface then updates a drawing in place
-    // only a drawing with an info circle is drawn interactive (a sandboxed frame, for its hover tooltip): the surface
-    // loads a frame again on every redraw, a scroll's too, and that flashes, where a plain image is kept
+    // every drawing a plain image, never interactive: the surface loads an interactive drawing (a sandboxed frame)
+    // again on every redraw, a scroll's too, and that flashed. A plain function, not a component, each drawing keyed;
+    // its height left out, so it follows the drawing's proportions at whatever width it's shown
     const draw = (key: string, svg: string, alt: string) =>
-      Svg ? <Svg key={key} source={svg} height={drawingHeight(svg)} isInteractive={svg.includes('class="info"')} alt={alt} /> : null
-    // `chart` may hold the head too (a card with its last window): then no separate head is drawn
+      Svg ? <Svg key={key} source={asImage(svg, size.width)} alt={alt} /> : null
     const block = (title: string, m: Model, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
-      const headInChart = !!chart?.includes('class="info"')
       const last = lastOf(m)
       return (
       <Box
@@ -562,16 +572,18 @@ export const register: Register = (on, options) => {
         backgroundColor="userMessageBackground"
       >
         {/* the countdown is drawn in the head, at its right, so its text takes the drawing's styles */}
-        {!headInChart && <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
+        <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
           {Svg ? (
-            draw(`head-${m.kind}`, headerSvg(m, title, size.width, pal, resetsIn(m, s.fine)),
-              `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`)
+            draw(`head-${m.kind}`, headerSvg(m, title, size.width, pal, resetsIn(m), last),
+              `${title}. ${resetsIn(m)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}${figuresText(m)} ${lastAlt(last)}`)
           ) : (
             <Box flexDirection="column">
               <Text bold>{title}</Text>
               {isShort(m) && <Text color="error">{runsOut(m)}</Text>}
+              {/* no chart here to show the two paces side by side: say it */}
+              {paceText(m) && <Text color={isShort(m) ? 'error' : undefined} dimColor={!isShort(m)}>{paceText(m)}</Text>}
               <Text>
-                {`${m.kind === 'week' ? 'Left at week reset' : 'Left at 5h reset'} ${leftText(m)} · Average ${m.noData ? 'no data' : rateText(m, m.rate)} · Limit ${rateText(m, m.limit)}`}
+                {`${m.kind === 'week' ? 'At week reset' : 'At 5h reset'} ${leftText(m)} · Your pace ${m.noData ? 'no data' : rateText(m, m.rate)} · Safe pace ${rateText(m, m.limit)}`}
               </Text>
               {/* the last window, quietly: dim, its figure in left-at-reset's colour */}
               {last && (
@@ -582,12 +594,12 @@ export const register: Register = (on, options) => {
               )}
             </Box>
           )}
-          {!Svg && <Button key={`reset-${m.kind}`} plain label={resetsIn(m, s.fine)} onPress={() => toggleFine($)} />}
-        </Box>}
+          {!Svg && <Text dimColor>{resetsIn(m)}</Text>}
+        </Box>
         {/* the chart and its controls are one unit: the controls stay right under the chart */}
         <Box key={`graph-${m.kind}`} flexDirection="column" gap={1}>
           {chart && Svg && (
-            draw(`chart-${m.kind}`, chart, `${headInChart ? `${title}. ${resetsIn(m, s.fine)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}Left at reset ${leftText(m)}, average ${m.noData ? 'no data' : rateText(m, m.rate)}, limit ${rateText(m, m.limit)}. ${lastAlt(last)}` : ''}${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Average ${rateText(m, m.rate)}, limit ${rateText(m, m.limit)}.`}`)
+            draw(`chart-${m.kind}`, chart, `${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`}`)
           )}
           {controls}
         </Box>
@@ -596,6 +608,8 @@ export const register: Register = (on, options) => {
             ? draw(`note-${m.kind}-${i}`, noteSvg(note, size.width, pal), note)
             : <Text color="inactive">{note}</Text>))}
         </Box>
+        {/* what Last window means, behind a Details button: the drawings carry no tooltip */}
+        {detailsBlock(m.kind, last ? [LAST_INFO, lastWindowNote(last)] : [])}
       </Box>
       )
     }
@@ -639,8 +653,8 @@ export const register: Register = (on, options) => {
         {Svg ? (
           // a column like the card's own, so a part left out (no baseline, no spend yet) is simply not there
           <Box flexDirection="column" gap={1}>
-            {/* the head's info circle opens its tooltip over the rows: head and rows are one drawing */}
-            {draw('models-head', withInfo(modelsHead(learned, now, pal), modelsCosts(learned, base, size.width, pal), MODELS_INFO, size.width, pal, 'What do these figures mean?'), `Models. ${modelsText(learned, base, null).join(' ')}`)}
+            {draw('models-head', modelsHead(learned, now, pal).svg, 'Models')}
+            {draw('models-costs', modelsCosts(learned, base, size.width, pal), `Models. ${modelsText(learned, base, null).join(' ')}`)}
             {base && (
               <Box flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={1} rowGap={1}>
                 <Text color="inactive">Compare with</Text>
@@ -648,6 +662,7 @@ export const register: Register = (on, options) => {
               </Box>
             )}
             {sp && draw('models-spend', modelsSpend(sp, size.width, pal), modelsText({ ...learned, models: [] }, null, sp).join(' '))}
+            {detailsBlock('models', MODELS_INFO.split('\n').filter(Boolean))}
           </Box>
         ) : (
           <Box flexDirection="column">
@@ -732,12 +747,12 @@ export const register: Register = (on, options) => {
     return (
       <Box key="cards" flexDirection="column">
         {week
-          ? block('This week', week, Svg ? cardDrawing(week, 'This week') : null, windowControls, [
+          ? block('This week', week, Svg ? cardDrawing(week) : null, windowControls, [
             ...(Svg && emptyChartText(week, now) ? [] : [averageNote(week)]),
           ])
           : <Text dimColor>No weekly limit reported.</Text>}
         {five
-          ? block('5-hour window', five, Svg ? cardDrawing(five, '5-hour window') : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
+          ? block('5-hour window', five, Svg ? cardDrawing(five) : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
           : <Text dimColor>No active 5-hour window.</Text>}
         {modelsCard}
         {syncRow(sync)}

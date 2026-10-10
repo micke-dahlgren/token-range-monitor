@@ -53,6 +53,6 @@ export type RangeDevice = { id: string; name: string | null; lastSeenAt?: number
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-range-monitor': { readings: RangeReading[]; seen: RangeWatch[]; steps: RangeStep[]; settings: RangeSettings; tick: number; palettes: Palettes; sync: RangeSync }
+    'token-range-monitor': { readings: RangeReading[]; seen: RangeWatch[]; steps: RangeStep[]; settings: RangeSettings; tick: number; palettes: Palettes; sync: RangeSync; details: string[] }
   }
 }
