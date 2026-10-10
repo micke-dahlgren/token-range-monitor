@@ -88,13 +88,55 @@ export async function createDevice(db: D1Database, userId: string, name: string 
   return { id, token }
 }
 
-/** The device a bearer token belongs to, marking it seen. */
-export async function deviceByToken(db: D1Database, token: string, now: number): Promise<DeviceRow | null> {
+const DAY_MS = 24 * 60 * 60 * 1000
+/** A device unused this long is signed out (rejected, then deleted by the cron). */
+export const DEVICE_IDLE_MS = 90 * DAY_MS
+/** `last_seen_at` is only rewritten when older than this, to save D1 writes. */
+export const SEEN_THROTTLE_MS = 60 * 60 * 1000
+
+export type DeviceLookup = { device: DeviceRow } | { expired: true } | null
+
+/**
+ * The device a bearer token belongs to. A device unused for DEVICE_IDLE_MS is
+ * deleted and reported as expired. Otherwise it is marked seen, but at most
+ * once per SEEN_THROTTLE_MS (one read per request, a write at most hourly).
+ */
+export async function deviceByToken(db: D1Database, token: string, now: number): Promise<DeviceLookup> {
   const row = await db
-    .prepare('UPDATE devices SET last_seen_at = ? WHERE token_hash = ? RETURNING id, user_id, name, created_at, last_seen_at')
-    .bind(now, await sha256Hex(token))
+    .prepare('SELECT id, user_id, name, created_at, last_seen_at FROM devices WHERE token_hash = ?')
+    .bind(await sha256Hex(token))
     .first<DeviceRow>()
-  return row ?? null
+  if (!row) return null
+  const seen = row.last_seen_at ?? row.created_at
+  if (now - seen > DEVICE_IDLE_MS) {
+    await db.prepare('DELETE FROM devices WHERE id = ?').bind(row.id).run()
+    return { expired: true }
+  }
+  if (now - seen > SEEN_THROTTLE_MS) {
+    await db.prepare('UPDATE devices SET last_seen_at = ? WHERE id = ?').bind(now, row.id).run()
+    row.last_seen_at = now
+  }
+  return { device: row }
+}
+
+/**
+ * Deletes devices unused for DEVICE_IDLE_MS, in batches so the cron stays
+ * within its CPU and D1 limits. Returns how many were deleted.
+ */
+export async function purgeIdleDevices(db: D1Database, now: number, batch = 500, maxBatches = 20): Promise<number> {
+  const cutoff = now - DEVICE_IDLE_MS
+  let total = 0
+  for (let i = 0; i < maxBatches; i++) {
+    const res = await db
+      .prepare(
+        'DELETE FROM devices WHERE id IN (SELECT id FROM devices WHERE last_seen_at < ?1 OR (last_seen_at IS NULL AND created_at < ?1) LIMIT ?2)',
+      )
+      .bind(cutoff, batch)
+      .run()
+    total += res.meta.changes
+    if (res.meta.changes < batch) break
+  }
+  return total
 }
 
 export async function deleteUser(db: D1Database, userId: string): Promise<void> {

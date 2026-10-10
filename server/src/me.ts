@@ -1,14 +1,8 @@
 /** Endpoints for a linked device: who am I, unlink this device, delete my account. */
-import { deleteUser, deviceByToken, type DeviceRow } from './db'
+import { authed } from './auth'
+import { deleteUser } from './db'
 import type { Deps, Env } from './env'
-import { bearer, HttpError, json } from './http'
-
-async function authed(req: Request, env: Env, deps: Deps): Promise<DeviceRow> {
-  const token = bearer(req)
-  const device = token ? await deviceByToken(env.DB, token, deps.now()) : null
-  if (!device) throw new HttpError(401, 'unauthorized')
-  return device
-}
+import { json } from './http'
 
 export async function getMe(req: Request, env: Env, deps: Deps): Promise<Response> {
   const device = await authed(req, env, deps)

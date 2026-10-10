@@ -74,7 +74,12 @@ export const privacyPage = () =>
 <h2>What is not stored</h2>
 <p>No prompts, conversations, code or files. No passwords. No tracking, analytics or ads. Data is never sold or shared, except with Cloudflare, which hosts the service.</p>
 <h2>Retention and deletion</h2>
-<p>Sign-in codes expire after 10 minutes and are removed within a day. Usage history is kept while your account exists and old entries are pruned over time. You can unlink a device, or delete your account and everything stored for it, at any time from the mod's settings in Claude Code; deletion is immediate.</p>
+<ul>
+<li>Sign-in codes expire after 10 minutes and are removed within a day.</li>
+<li>Each day's synced usage is deleted 15 days after it was last updated; the mod only uses the last 14 days.</li>
+<li>A device not used for 90 days is signed out and its record deleted; link it again to resume syncing.</li>
+<li>You can unlink a device, or delete your account, at any time from the mod's settings in Claude Code. Deleting the account immediately removes everything stored for it: your email, sign-in identities, devices and all usage history.</li>
+</ul>
 <h2>Contact</h2>
 <p>Questions: open an issue at <a href="${REPO_URL}/issues">${REPO_URL.replace('https://', '')}</a>.</p>`,
     true,

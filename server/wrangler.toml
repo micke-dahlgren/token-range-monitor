@@ -17,6 +17,15 @@ database_name = "token-range-monitor"
 database_id = "c432401c-b857-4055-b6df-0f5bdf045dc9"
 migrations_dir = "migrations"
 
-# Daily housekeeping (UTC): deletes expired link codes.
+# Rate limit for /v1/lists: 60 requests per 60 s per device (Workers Rate
+# Limiting binding: counted at the edge, per location, no D1 writes).
+# namespace_id is any integer you pick, unique within the Cloudflare account.
+[[ratelimits]]
+name = "LISTS_LIMITER"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+# Daily housekeeping (UTC): deletes expired link codes, lists not updated for
+# 22 days and devices unused for 90 days.
 [triggers]
 crons = ["17 3 * * *"]

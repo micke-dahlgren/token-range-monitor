@@ -7,10 +7,12 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string
   GITHUB_CLIENT_ID?: string
   GITHUB_CLIENT_SECRET?: string
-  /** HMAC key for Claude account ids (Phase 2 lists API). */
+  /** HMAC key for Claude account ids (lists API). */
   ACCOUNT_HASH_KEY?: string
   /** HMAC key signing the OAuth state cookie and the rate-limit IP hash. */
   SESSION_KEY?: string
+  /** Workers Rate Limiting binding for /v1/lists, keyed by device id (see wrangler.toml). Unbound: no limit. */
+  LISTS_LIMITER?: RateLimit
 }
 
 /** Side effects the handlers use, injectable so tests can fake providers and time. */

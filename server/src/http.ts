@@ -6,6 +6,9 @@ export class HttpError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
+    /** Optional human-readable explanation, sent as `message`. */
+    readonly detail?: string,
+    readonly headers: Record<string, string> = {},
   ) {
     super(code)
   }
@@ -18,7 +21,8 @@ export function json(data: unknown, status = 200, headers: HeadersInit = {}): Re
   })
 }
 
-export const jsonError = (status: number, error: string) => json({ error }, status)
+export const jsonError = (status: number, error: string, message?: string, headers: Record<string, string> = {}) =>
+  json(message ? { error, message } : { error }, status, headers)
 
 const PAGE_HEADERS = {
   'content-type': 'text/html; charset=utf-8',

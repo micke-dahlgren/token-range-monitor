@@ -136,17 +136,22 @@ describe('state cookie', () => {
 })
 
 describe('device API', () => {
-  it('/v1/me requires a valid bearer token and updates last_seen_at', async () => {
+  it('/v1/me requires a valid bearer token and updates last_seen_at at most hourly', async () => {
     const w = fakeWorld()
     w.google.set('g', { sub: `g-${uniq()}`, email: `me-${uniq()}@example.com`, email_verified: true })
+    const linkedAt = w.deps.now()
     const t = await linkDevice(w, 'google', 'g', 'box')
     expect((await call(w, '/v1/me')).status).toBe(401)
     expect((await authed(w, '/v1/me', 'garbage')).status).toBe(401)
     w.advance(5000)
     const res = await authed(w, '/v1/me', t)
     expect(res.status).toBe(200)
-    const me = await res.json<{ devices: Array<{ id: string; name: string; lastSeenAt: number; current: boolean }> }>()
-    expect(me.devices).toEqual([{ id: expect.any(String), name: 'box', lastSeenAt: w.deps.now(), current: true }])
+    type Me = { devices: Array<{ id: string; name: string; lastSeenAt: number; current: boolean }> }
+    // within the hour: not rewritten (saves D1 writes)
+    expect((await res.json<Me>()).devices).toEqual([{ id: expect.any(String), name: 'box', lastSeenAt: linkedAt, current: true }])
+    w.advance(60 * 60 * 1000)
+    const later = await (await authed(w, '/v1/me', t)).json<Me>()
+    expect(later.devices[0]!.lastSeenAt).toBe(w.deps.now())
   })
 
   it('DELETE /v1/device revokes only the calling device', async () => {
@@ -192,7 +197,7 @@ describe('device API', () => {
 describe('routing and pages', () => {
   it('unknown routes are 404 JSON (through the real worker entry too)', async () => {
     const w = fakeWorld()
-    for (const res of [await call(w, '/nope'), await call(w, '/v1/lists'), await SELF.fetch('http://localhost:8787/nope')]) {
+    for (const res of [await call(w, '/nope'), await call(w, '/v1/nope'), await SELF.fetch('http://localhost:8787/nope')]) {
       expect(res.status).toBe(404)
       expect(res.headers.get('content-type')).toContain('application/json')
       expect(await res.json()).toEqual({ error: 'not_found' })
@@ -213,7 +218,7 @@ describe('routing and pages', () => {
     const privacy = await SELF.fetch('http://localhost:8787/privacy')
     expect(privacy.status).toBe(200)
     const text = await privacy.text()
-    for (const word of ['email', 'Retention', 'delete']) expect(text).toContain(word)
+    for (const word of ['email', 'Retention', 'delete', '15 days', '90 days']) expect(text).toContain(word)
   })
 
   it('hashes Claude account ids with ACCOUNT_HASH_KEY (Phase 2 helper)', async () => {
