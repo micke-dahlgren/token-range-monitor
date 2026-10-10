@@ -174,6 +174,26 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
   expect((await term.findAll({ type: 'Text', text: /^Last window$/ })).length).toBe(2)
   expect(await term.find({ type: 'Text', text: '28% to spare' })).toBeDefined()
   expect(await term.find({ type: 'Text', text: '17% short' })).toBeDefined()
+  // compact: the cards keep their border but drop the desktop's padding rows and gaps
+  for (const k of ['week', 'five', 'models']) {
+    const card = await term.find({ key: `block-${k}` })
+    expect(card?.props.padding).toBeUndefined()
+    expect(card?.props.gap).toBe(0)
+    expect(card?.props.marginBottom).toBe(0)
+  }
+  // each card draws its window as a track at your pace, the reset ┤ at its end; this heavy week runs out early
+  expect((await term.findAll({ type: 'Text', text: '┤' })).length).toBe(2)
+  expect(await term.find({ type: 'Text', text: '╳' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^\S.* early$/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^\d+\.\d%\/day$/ })).toBeDefined()
+  // the figures the track leaves out are behind the card's Details
+  expect(await term.find({ type: 'Text', text: /^At week reset / })).toBeUndefined()
+  await term.press({ key: 'details-btn-week' })
+  expect(await term.find({ type: 'Text', text: /^At week reset / })).toBeDefined()
+  // the models card is one line until its Details opens
+  expect(await term.find({ type: 'Text', text: /^This week \d+% used/ })).toBeUndefined()
+  await term.press({ key: 'details-btn-models' })
+  expect(await term.find({ type: 'Text', text: /^This week \d+% used/ })).toBeDefined()
   await term.unmount()
 
   // the band above the prompt doesn't show it

@@ -5,9 +5,9 @@ import type { RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } fr
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   drawingHeight, emptyChartSvg, emptyChartText, fit, fitHeight, CELL_PX, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
-  bandPart, bandWidth, isShort, leftText, paceText, refine, runsOut, weekChart, windowHours,
+  bandPart, bandWidth, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours,
 } from './range'
-import type { Average, LastWindow, Model } from './range'
+import type { Average, LastWindow, Model, TrackSeg, TrackTone } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
 import { baselineOf, learn, ratio, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
 import {
@@ -18,7 +18,7 @@ import type { Lists, Platform, SyncIO } from './sync'
 
 const PANE = 'token-range-monitor'
 /** The mod's version, shown in the pane's title: keep it in step with `.claude-plugin/plugin.json`. */
-const VERSION = '1.3.1'
+const VERSION = '1.3.2'
 const TITLE = `Token Range Monitor ${VERSION}`
 const readings = atom({ plugin: 'token-range-monitor', key: 'readings' } as const, [])
 const settings = atom({ plugin: 'token-range-monitor', key: 'settings' } as const, DEFAULT_SETTINGS)
@@ -673,7 +673,7 @@ export const register: Register = (on, options) => {
           onPress={() => void update($, details, l => (l.includes(key) ? l.filter(k => k !== key) : [...l, key]))} />
       : null)
     const detailsText = (key: string, paragraphs: string[]) => (paragraphs.length && open.includes(key)
-      ? <Box key={`details-${key}`} flexDirection="column" gap={1}>
+      ? <Box key={`details-${key}`} flexDirection="column" gap={Svg ? 1 : 0}>
           {paragraphs.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
         </Box>
       : null)
@@ -688,41 +688,82 @@ export const register: Register = (on, options) => {
       `At reset ${leftText(m)}, your pace ${m.noData ? 'no data' : rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`
     const lastAlt = (last: LastWindow | null) => (last ? `${LAST_LABEL} ${lastWindowText(last)}. ${lastWindowNote(last)} ` : '')
 
+    // the terminal's rows are few and each one counts: its cards keep the border, but no padding rows, no gaps
+    const gap = Svg ? 1 : 0
+    const cardBox = Svg
+      ? { gap: 1, marginBottom: 1, padding: 2 }
+      : { gap: 0, marginBottom: 0, paddingX: 1 }
+
     // one dark card per limit, as on the car's display: head, chart, controls, then the notes
     // every drawing a plain image, never interactive: the surface loads an interactive drawing (a sandboxed frame)
     // again on every redraw, a scroll's too, and that flashed. A plain function, not a component, each drawing keyed;
     // its height left out, so it follows the drawing's proportions at whatever width it's shown
     const draw = (key: string, svg: string, alt: string) =>
       Svg ? <Svg key={key} source={asImage(svg, W)} alt={alt} /> : null
+    // the terminal's range track (see rangeTrack): each piece of text in its tone, at its exact width
+    const TONE: Record<TrackTone, { color?: 'text' | 'subtle' | 'error' | 'success' | 'suggestion'; dimColor?: boolean; bold?: boolean }> = {
+      text: { color: 'text' }, dim: { dimColor: true }, faint: { color: 'subtle' }, short: { color: 'error', bold: true },
+      ok: { color: 'success' }, unused: { color: 'suggestion' }, unusedBold: { color: 'suggestion', bold: true },
+    }
+    const segs = (key: string, list: TrackSeg[]) => list.filter(g => g.text).map((g, i) => (
+      <Box key={`${key}-${i}`} width={[...g.text].length} flexShrink={0}><Text {...TONE[g.tone]}>{g.text.trimEnd()}</Text></Box>
+    ))
+    // the card's inner width: the pane's, less the border and a column of padding each side
+    const trackView = (m: Model) => {
+      const t = rangeTrack(m, e.props.bodyColumns - 4)
+      if (!t) return <Text key={`track-${m.kind}`} dimColor>{m.noData ?? 'No estimate yet.'}</Text>
+      return (
+        <Box key={`track-${m.kind}`} flexDirection="column">
+          <Box flexDirection="row">{segs(`line-${m.kind}`, t.line)}</Box>
+          {t.early && <Box marginLeft={t.early.indent}><Text {...TONE.short}>{t.early.text}</Text></Box>}
+          {t.unused && (
+            <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={1}>
+              <Box flexDirection="row">{segs(`unused-${m.kind}`, t.unused.left)}</Box>
+              <Text {...TONE[t.unused.right.tone]}>{t.unused.right.text}</Text>
+            </Box>
+          )}
+        </Box>
+      )
+    }
+
     const block = (title: string, m: Model, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
       const last = lastOf(m)
-      const info = last ? [LAST_INFO, lastWindowNote(last)] : []
+      // the terminal has no head drawing, so Details also carries the figures the track leaves out
+      const figures = Svg ? [] : [`${m.kind === 'week' ? 'At week reset' : 'At 5h reset'} ${leftText(m)} · your pace ${m.noData ? 'no data' : rateText(m, m.rate)} · safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`]
+      const info = [...figures, ...(last ? [LAST_INFO, lastWindowNote(last)] : [])]
       return (
       <Box
         key={`block-${m.kind}`}
         flexDirection="column"
-        gap={1}
-        marginBottom={1}
-        padding={2}
+        {...cardBox}
         borderStyle="round"
         borderColor="userMessageBackground"
         backgroundColor="userMessageBackground"
       >
         {/* the countdown is drawn in the head, at its right, so its text takes the drawing's styles */}
-        <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
-          {Svg ? (
-            draw(`head-${m.kind}`, headerSvg(m, title, W, pal, resetsIn(m), last),
-              `${title}. ${resetsIn(m)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}${figuresText(m)} ${lastAlt(last)}`)
-          ) : (
-            <Box flexDirection="column">
+        {Svg ? (
+          <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
+            {draw(`head-${m.kind}`, headerSvg(m, title, W, pal, resetsIn(m), last),
+              `${title}. ${resetsIn(m)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}${figuresText(m)} ${lastAlt(last)}`)}
+          </Box>
+        ) : (
+          <Box flexDirection="column">
+            {/* the countdown on the title's row, so the lines under it get the card's whole width */}
+            <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
               <Text bold>{title}</Text>
-              {isShort(m) && <Text color="error">{runsOut(m)}</Text>}
-              {/* no chart here to show the two paces side by side: say it */}
-              {paceText(m) && <Text color={isShort(m) ? 'error' : undefined} dimColor={!isShort(m)}>{paceText(m)}</Text>}
-              <Text>
-                {`${m.kind === 'week' ? 'At week reset' : 'At 5h reset'} ${leftText(m)} · Your pace ${m.noData ? 'no data' : rateText(m, m.rate)} · Safe pace ${rateText(m, m.limit)}`}
-              </Text>
-              {/* the last window, quietly: dim, its figure in left-at-reset's colour */}
+              <Text dimColor>{resetsIn(m)}</Text>
+            </Box>
+            {trackView(m)}
+            {/* the figures under a blank row: the two paces, then the last window, quietly */}
+            <Box key={`figures-${m.kind}`} flexDirection="column" marginTop={1}>
+              {!m.noData && (
+                <Box key={`pace-${m.kind}`} flexDirection="row" flexWrap="wrap">
+                  <Text dimColor>Pace </Text>
+                  <Text bold color={isShort(m) ? 'error' : undefined}>{rateShort(m, m.rate)}</Text>
+                  <Text dimColor> · safe </Text>
+                  <Text>{rateShort(m, m.limit)}</Text>
+                </Box>
+              )}
               {last && (
                 <Box key={`last-${m.kind}`} flexDirection="row" columnGap={1}>
                   <Text dimColor>{LAST_LABEL}</Text>
@@ -730,19 +771,26 @@ export const register: Register = (on, options) => {
                 </Box>
               )}
             </Box>
-          )}
-          {!Svg && <Text dimColor>{resetsIn(m)}</Text>}
-        </Box>
+          </Box>
+        )}
         {chart && Svg && (
           draw(`chart-${m.kind}`, chart, `${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`}`)
         )}
+        {/* the terminal: the note on its own, then the controls at the left and Details at the right */}
+        {!Svg && notes.map((note, i) => <Text key={`note-${m.kind}-${i}`} color="inactive">{note}</Text>)}
+        {!Svg && (controls || info.length > 0) && (
+          <Box key={`foot-${m.kind}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2}>
+            {controls ?? <Box />}
+            {detailsButton(m.kind, info)}
+          </Box>
+        )}
         {/* under the chart, the note, the controls and Details share a row, wrapping only when there's no room */}
-        {(notes.length > 0 || controls || info.length > 0) && (
-          <Box key={`foot-${m.kind}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={1}>
+        {Svg && (notes.length > 0 || controls || info.length > 0) && (
+          <Box key={`foot-${m.kind}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
             <Box flexDirection="column" flexShrink={1}>
               {notes.map((note, i) => <Text key={`note-${m.kind}-${i}`} color="inactive">{note}</Text>)}
             </Box>
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
               {controls}
               {detailsButton(m.kind, info)}
             </Box>
@@ -765,13 +813,13 @@ export const register: Register = (on, options) => {
     const choicesOff = weekRecorded < MIN_RECORDED_H.week
     const windowControls = (
       // a block at the right under the chart: what the average covers, and for a custom window its length beneath
-      <Box flexDirection="column" alignSelf="flex-end" alignItems="flex-start" gap={1}>
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
+      <Box flexDirection="column" alignSelf="flex-end" alignItems="flex-start" gap={gap}>
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
           {seg('mode-reset', 'Since reset', s.mode === 'reset', () => void choose($, { mode: 'reset' }), choicesOff)}
           {seg('mode-custom', 'Custom', isCustom, () => void setWindow($, n, unit), choicesOff)}
         </Box>
         {isCustom && !choicesOff && (
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
             <Text color="inactive">Last</Text>
             <Button key="win-dec" label="−" dimColor={n <= UNIT_MIN[unit]} onPress={() => void setWindow($, n - 1, unit)} />
             <Text bold color="text">{` ${n} `}</Text>
@@ -798,13 +846,13 @@ export const register: Register = (on, options) => {
           return `${name} ${ratio(m, base).x}`
         }).join(' · ')
     const modelsCard = (
-      <Box key="block-models" flexDirection="column" gap={1} marginBottom={1} padding={2} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
+      <Box key="block-models" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
         {Svg ? (
           // a column like the card's own, so a part left out (no baseline, no spend yet) is simply not there
           <Box flexDirection="column" gap={1}>
             {draw('models-head', modelsHead(learned, now, pal).svg, 'Models')}
             {/* compact: a line of each model's cost, and Details for the full card (rows, compare, this week, what it means) */}
-            <Box key="models-compact" flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={1}>
+            <Box key="models-compact" flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
               <Text key="models-summary" color="inactive">{modelsSummary}</Text>
               {detailsButton('models', ['full'])}
             </Box>
@@ -819,10 +867,17 @@ export const register: Register = (on, options) => {
             {modelsOpen && <Text key="models-info" dimColor>{MODELS_INFO}</Text>}
           </Box>
         ) : (
+          // compact as on the desktop: the name and the summary on one line, the rest behind Details
           <Box flexDirection="column">
-            <Text bold>Models</Text>
-            {modelsText(learned, base, sp).map(line => <Text>{line}</Text>)}
-            {base && (
+            <Box key="models-compact" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+              <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+                <Text bold>Models</Text>
+                <Text key="models-summary" color="inactive">{modelsSummary}</Text>
+              </Box>
+              {detailsButton('models', ['full'])}
+            </Box>
+            {modelsOpen && modelsText(learned, base, sp).map((line, i) => <Text key={`models-line-${i}`} dimColor>{line}</Text>)}
+            {modelsOpen && base && (
               <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
                 <Text color="inactive">Compare with</Text>
                 {shown.map(m => seg(`base-${m.id}`, names.get(m.id) ?? m.name, m === base, () => void choose($, { baseline: m.id })))}

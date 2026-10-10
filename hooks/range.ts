@@ -452,6 +452,56 @@ export const bandWidth = (limits: Model[], short: boolean) =>
 export const rateText = (m: Model, perHour: number) =>
   m.kind === 'week' ? `${fx(perHour * 24)}% a day` : `${fx(perHour)}% an hour`
 
+/** A rate in short: "15.9%/day", "8.6%/h". */
+export const rateShort = (m: Model, perHour: number) =>
+  m.kind === 'week' ? `${fx(perHour * 24)}%/day` : `${fx(perHour)}%/h`
+
+/** The terminal's range track: a piece of text and how it's coloured. */
+export type TrackTone = 'text' | 'dim' | 'faint' | 'short' | 'ok' | 'unused' | 'unusedBold'
+export type TrackSeg = { text: string; tone: TrackTone }
+export type Track = {
+  line: TrackSeg[]
+  /** Short: how early, its end under the ╳ (`indent` columns in). */
+  early?: { indent: number; text: string }
+  /** Lasting: what's left unused, and how far past the reset the pace carries. */
+  unused?: { left: TrackSeg[]; right: TrackSeg }
+}
+/** The width of the track's label column: "At your pace", "Left unused 57%". */
+export const TRACK_LABEL = 16
+
+/**
+ * The window as a line at your pace, for the terminal, `width` columns in all. Its first 70% runs to the
+ * reset (┤), at the same column on every card. Short, the line stops at ╳ where it runs out, the rest of the
+ * window dotted; lasting, it runs on past the reset in the unused colour as far as the pace carries,
+ * cut short with ▸ where that's beyond the pane. Null without an estimate.
+ */
+export function rangeTrack(m: Model, width: number): Track | null {
+  if (m.noData || !(m.left > 0)) return null
+  const T = Math.max(12, width - TRACK_LABEL - 1), R = Math.round(T * 0.7), O = T - R - 1
+  const label: TrackSeg = { text: 'At your pace'.padEnd(TRACK_LABEL), tone: 'dim' }
+  const reset: TrackSeg = { text: '┤', tone: 'dim' }
+  if (isShort(m)) {
+    const r = Math.max(1, Math.min(R - 1, Math.round(m.runsOutIn / m.left * R)))
+    const text = `${dur(m.early)} early`
+    return {
+      line: [label, { text: '━'.repeat(r - 1), tone: 'text' }, { text: '╳', tone: 'short' }, { text: '┄'.repeat(R - r), tone: 'faint' }, reset],
+      early: { indent: Math.max(0, TRACK_LABEL + r - text.length), text },
+    }
+  }
+  // at rate 0 it never runs out: the line runs on to the pane's edge
+  const past = m.runsOutIn - m.left
+  const want = isFinite(past) ? Math.max(0, Math.round(past / m.left * R)) : Infinity
+  const cut = want > O
+  const ext = cut ? O - 1 : want
+  return {
+    line: [label, { text: '━'.repeat(R), tone: 'ok' }, reset, { text: '━'.repeat(ext), tone: 'unused' }, ...(cut ? [{ text: '▸', tone: 'unused' } as TrackSeg] : [])],
+    unused: {
+      left: [{ text: 'Left unused ', tone: 'unused' }, { text: `${Math.round(m.arrive)}%`, tone: 'unusedBold' }],
+      right: { text: isFinite(past) ? `${dur(past)} past the reset` : 'lasts past the reset', tone: 'unused' },
+    },
+  }
+}
+
 /** Your pace against the safe pace, in words: what the chart's two lines show, for where there's no chart. */
 export function paceText(m: Model): string | null {
   if (m.noData || !(m.limit > 0) || !(m.rate > 0)) return null

@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, increments, lastWindow, lastWindowNote, lastWindowText, isWatched, needsMore, refine, parseWindow, project, resetsIn, signed, bandPart, bandWidth, paceText, spreadLabels, usedBetween } from '../hooks/range'
+import { DAY, HOUR, MIN, averageNote, chartWait, emptyChartText, headerDraw, heartbeat, increments, lastWindow, lastWindowNote, lastWindowText, isWatched, needsMore, refine, parseWindow, project, resetsIn, signed, bandPart, bandWidth, paceText, rangeTrack, spreadLabels, TRACK_LABEL, usedBetween } from '../hooks/range'
+import type { Model } from '../hooks/range'
 
 const hours = (h: number) => ({ type: 'hours', hours: h }) as const
 
@@ -281,4 +282,41 @@ test('the head shows the last window quietly, its caption ending in an info circ
   const plain = headerDraw(m, '5-hour window', 700, undefined, '')
   expect(plain.svg).not.toContain('Last window')
   expect(plain.info).toBeUndefined()
+})
+
+test('the terminal track: short stops at ╳ with how early under it, lasting runs on past the reset', async () => {
+  const join = (segs: Array<{ text: string }>) => segs.map(g => g.text).join('')
+  const model = (m: Partial<Model>) => ({ kind: 'week', noData: null, over: false, early: 0, arrive: 0, ...m }) as Model
+  // runs out at 80% of the way to the reset, 20h early
+  const short = rangeTrack(model({ left: 100, runsOutIn: 80, early: 20, over: true, arrive: -11 }), 42)!
+  const line = join(short.line)
+  expect(line.startsWith('At your pace')).toBe(true)
+  expect(line.endsWith('┤')).toBe(true)
+  expect(short.early!.text).toBe('20h early')
+  // the early figure's last character sits under the ╳
+  expect(short.early!.indent + short.early!.text.length - 1).toBe(line.indexOf('╳'))
+  expect(short.unused).toBeUndefined()
+
+  // the 5-hour window: 57% left at reset, the pace lasting 6h 38m past it, more than the pane can draw
+  const lasting = rangeTrack(model({ kind: 'five', left: 8 / 3, runsOutIn: 8 / 3 + 6 + 38 / 60, arrive: 57 }), 42)!
+  const run = join(lasting.line)
+  expect(run.indexOf('┤')).toBe(line.indexOf('┤'))   // the reset at the same column on every card
+  expect(run.endsWith('▸')).toBe(true)
+  expect(join(lasting.unused!.left)).toBe('Left unused 57%')
+  expect(lasting.unused!.right.text).toBe('6h 38m past the reset')
+
+  // a short way past the reset: drawn to scale, no ▸
+  const near = join(rangeTrack(model({ left: 100, runsOutIn: 105, arrive: 5 }), 42)!.line)
+  expect(near.endsWith('▸')).toBe(false)
+  expect(near.length).toBeGreaterThan(near.indexOf('┤') + 1)
+
+  // never wider than the card, at any width
+  for (const w of [24, 30, 36, 42, 60, 90]) {
+    for (const t of [rangeTrack(model({ left: 100, runsOutIn: 80, early: 20, over: true }), w)!, rangeTrack(model({ left: 2, runsOutIn: 50, arrive: 90 }), w)!]) {
+      expect(join(t.line).length).toBeLessThanOrEqual(Math.max(w, TRACK_LABEL + 13))
+    }
+  }
+  // no use yet, and no estimate
+  expect(rangeTrack(model({ left: 2, runsOutIn: Infinity, arrive: 60 }), 42)!.unused!.right.text).toBe('lasts past the reset')
+  expect(rangeTrack(model({ left: 2, runsOutIn: 3, noData: 'No estimate yet.' }), 42)).toBeNull()
 })
