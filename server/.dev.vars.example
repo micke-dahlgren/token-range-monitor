@@ -1,0 +1,22 @@
+# Copy to .dev.vars for `npm run dev` (never commit .dev.vars).
+# Values here are for LOCAL DEVELOPMENT only. Production values are set with
+# `wrangler secret put <NAME>`.
+
+# Overrides the [vars] value in wrangler.toml so redirect URIs point at the dev server.
+PUBLIC_URL=http://localhost:8787
+
+# Google OAuth client (Web application) with redirect URI
+#   http://localhost:8787/auth/google/callback
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# GitHub OAuth app with callback URL
+#   http://localhost:8787/auth/github/callback
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+
+# Random secrets, e.g. `openssl rand -base64 32`.
+# HMAC key for hashing Claude account ids (used by the Phase 2 /v1/lists API).
+ACCOUNT_HASH_KEY=
+# HMAC key that signs the short-lived OAuth state cookie.
+SESSION_KEY=

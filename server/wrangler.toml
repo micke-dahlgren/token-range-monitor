@@ -1,0 +1,22 @@
+# Token Range Monitor sync backend (Cloudflare Worker + D1).
+# See README.md for setup. Secrets are NOT stored here: use `wrangler secret put`
+# (prod) or `.dev.vars` (local dev).
+name = "token-range-monitor"
+main = "src/index.ts"
+tsconfig = "./tsconfig.json"
+compatibility_date = "2026-10-01"
+
+[vars]
+# Public origin of this worker, no trailing slash. OAuth redirect URIs and the
+# link URL shown to users are built from it. Local dev overrides it in .dev.vars.
+PUBLIC_URL = "https://token-range-monitor.micke-dahlgren.workers.dev"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "token-range-monitor"
+database_id = "c432401c-b857-4055-b6df-0f5bdf045dc9"
+migrations_dir = "migrations"
+
+# Daily housekeeping (UTC): deletes expired link codes.
+[triggers]
+crons = ["17 3 * * *"]

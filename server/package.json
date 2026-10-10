@@ -1,0 +1,22 @@
+{
+  "name": "token-range-monitor-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sync backend for the Token Range Monitor Claude Code mod (Cloudflare Worker + D1).",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply token-range-monitor --local",
+    "db:migrate:remote": "wrangler d1 migrations apply token-range-monitor --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.0",
+    "@cloudflare/workers-types": "^5.20261010.1",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.149.0"
+  }
+}

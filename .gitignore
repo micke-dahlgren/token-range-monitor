@@ -1,2 +1,10 @@
 .claude-plugin/types/
 node_modules/
+server/node_modules/
+server/.wrangler/
+server/.dev.vars
+
+# secrets
+.env
+.env.*
+!.env.example
