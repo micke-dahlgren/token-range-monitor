@@ -4,12 +4,12 @@ import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 import type { RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
-  emptyChartSvg, emptyChartText, fit, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, noteSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
+  drawingHeight, emptyChartSvg, emptyChartText, fit, fitHeight, CELL_PX, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
   bandPart, bandWidth, isShort, leftText, paceText, refine, runsOut, weekChart, windowHours,
 } from './range'
 import type { Average, LastWindow, Model } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
-import { baselineOf, learn, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
+import { baselineOf, learn, ratio, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
 import {
   agoText, cancelSignIn, cleanName, configureSync, DEVICE_KEY, DEVICES_FRESH, deleteSynced, deviceLabel, downloadedFor, endSync, GENERIC_NAMES, isDeviceId,
   NAME_KEY, platformOf, refreshDevices, removeDevice, signIn, signOut, startSync, syncTick,
@@ -17,7 +17,9 @@ import {
 import type { Lists, Platform, SyncIO } from './sync'
 
 const PANE = 'token-range-monitor'
-const TITLE = 'Token Range Monitor'
+/** The mod's version, shown in the pane's title: keep it in step with `.claude-plugin/plugin.json`. */
+const VERSION = '1.3.1'
+const TITLE = `Token Range Monitor ${VERSION}`
 const readings = atom({ plugin: 'token-range-monitor', key: 'readings' } as const, [])
 const settings = atom({ plugin: 'token-range-monitor', key: 'settings' } as const, DEFAULT_SETTINGS)
 const tick = atom({ plugin: 'token-range-monitor', key: 'tick' } as const, 0)
@@ -25,12 +27,18 @@ const seen = atom({ plugin: 'token-range-monitor', key: 'seen' } as const, [])
 const palettes = atom({ plugin: 'token-range-monitor', key: 'palettes' } as const, DEFAULT_PALETTES)
 const steps = atom({ plugin: 'token-range-monitor', key: 'steps' } as const, [])
 /**
- * A drawing as a plain image: the drawings are made for a frame (a wide canvas, filled to the frame's width), so as
- * an image each gets the width it was laid out for and a viewBox, and scales evenly to the width it's shown at.
+ * How much larger the drawings are shown than they're laid out: everything in them (text, lines, spacing) grows
+ * together, one step up from the size they're written in, so nothing in them collides.
  */
-const asImage = (svg: string, width: number) =>
+const ZOOM = 1.125
+/**
+ * A drawing as a plain image: the drawings are made for a frame (a wide canvas, filled to the frame's width), so as
+ * an image each gets a viewBox the width it was laid out for, `layout`, shown ZOOM times larger; it scales evenly to
+ * whatever width it's shown at.
+ */
+const asImage = (svg: string, layout: number) =>
   svg.replace(/^<svg ([^>]*?)width="\d+" height="(\d+)">/, (_, attrs: string, h: string) =>
-    `<svg ${attrs}width="${Math.round(width)}" height="${h}" viewBox="0 0 ${Math.round(width)} ${h}" preserveAspectRatio="xMidYMin meet">`)
+    `<svg ${attrs}width="${Math.round(layout * ZOOM)}" height="${Math.round(Number(h) * ZOOM)}" viewBox="0 0 ${Math.round(layout)} ${h}" preserveAspectRatio="xMidYMin meet">`)
 /** Which cards' Details blocks are open: `week`, `five`, `models`. */
 const details = atom({ plugin: 'token-range-monitor', key: 'details' } as const, [] as string[])
 /** What the pane's sync row shows; sync itself (./sync) keeps it through syncIO. */
@@ -214,6 +222,98 @@ async function commandName($: EngineInterface, platform: Platform): Promise<stri
   } catch {
     return null
   }
+}
+
+/** The sync pane's own: what sync is doing, sign out, delete, and the linked devices, each removable. */
+const SYNC_PANE = 'token-range-monitor-sync'
+const SYNC_TITLE = 'Sync settings'
+
+/** Opens the sync settings, and asks for the device list if it wasn't asked for just now. */
+async function openSyncPane($: EngineInterface) {
+  await $.ui.open({ id: SYNC_PANE, title: SYNC_TITLE })
+  void refreshDevices(syncIO($), DEVICES_FRESH).catch(() => undefined)
+}
+
+type Els = ReturnType<EngineInterface['ui']['resolve']>
+
+/** Every sync control: the settings pane draws it, and the main pane while a sign-in waits. */
+function syncPanel($: EngineInterface, els: Els, v: RangeSync, clockNow: number) {
+  const { Box, Text, Button, Link } = els
+    return (
+      <Box key="sync" flexDirection="column" gap={1} marginTop={1}>
+        {/* the row's parts as one flat list: a fragment here is drawn as a column of its own on the desktop */}
+        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
+          {v.status === 'signedIn'
+            ? [
+                <Text key="who" color="inactive">{`Synced as ${v.email || 'you'} · last sync ${agoText(v.last, clockNow)} ·`}</Text>,
+                <Button key="sync-signout" label="Sign out" dimColor={!!v.busy} onPress={() => void signOut(syncIO($))} />,
+                <Button key="sync-delete" label={v.confirmDelete ? 'Press again to delete all synced data' : 'Delete synced data'}
+                  variant={v.confirmDelete ? 'primary' : 'secondary'} dimColor={!!v.busy} onPress={() => void deleteSynced(syncIO($))} />,
+              ]
+            : v.status === 'waiting'
+              ? [
+                  <Text key="waiting" color="inactive">{`Waiting for sign-in… code ${v.code ?? ''} ·`}</Text>,
+                  <Button key="sync-cancel" label="Cancel" onPress={() => void cancelSignIn(syncIO($))} />,
+                ]
+              : [
+                  <Text key="title" color="inactive">{v.status === 'off' ? 'Sync across devices · off' : 'Sync across devices ·'}</Text>,
+                  ...(v.status === 'off' ? [] : [<Button key="sync-signin" label="Sign in" dimColor={!!v.busy} onPress={() => void signIn(syncIO($))} />]),
+                ]}
+        </Box>
+        {/* the devices signed in to this account, this one first: any other one can be removed */}
+        {v.status === 'signedIn' && v.devices && v.devices.length > 0 && (
+          <Box key="devices" flexDirection="column">
+            <Text key="devices-title" color="inactive">Linked devices</Text>
+            {v.devices.map(d => (
+              <Box key={`device-${d.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
+                {d.current
+                  ? [<Text key="name">{`${deviceLabel(d)} · this device`}</Text>]
+                  : [
+                      <Text key="name">{`${deviceLabel(d)} · last seen ${d.lastSeenAt === undefined ? 'never' : agoText(d.lastSeenAt, clockNow)} ·`}</Text>,
+                      <Button key={`sync-remove-${d.id}`}
+                        label={v.confirmRemove === d.id ? `Press again to remove ${deviceLabel(d)} and its synced data` : 'Remove'}
+                        variant={v.confirmRemove === d.id ? 'primary' : 'secondary'} dimColor={!!v.busy}
+                        onPress={() => void removeDevice(syncIO($), d.id)} />,
+                    ]}
+              </Box>
+            ))}
+          </Box>
+        )}
+        {/* the page to sign in on, where the code is typed: as a link, and as text to copy */}
+        {v.status === 'waiting' && v.url && (
+          <Box flexDirection="column">
+            {/* the link inside a Text, as the inline element it is; the address again as plain text to copy */}
+            <Text>Open <Link href={v.url} label="the sign-in page" /> and enter the code {v.code ?? 'shown above'}.</Text>
+            <Text dimColor>{v.url}</Text>
+          </Box>
+        )}
+        {v.note && <Text dimColor>{v.note}</Text>}
+      </Box>
+    )
+}
+
+/**
+ * The main pane's sync line: one quiet line, the rest in the settings pane. Signed out, a text button to turn
+ * sync on; signing in, the code and the page (it's needed right there); signed in, when it last synced and a cog.
+ */
+function syncLine($: EngineInterface, els: Els, v: RangeSync, clockNow: number) {
+  const { Box, Text, Button } = els
+  if (v.status === 'off') return null
+  if (v.status === 'waiting') return syncPanel($, els, v, clockNow)
+  return (
+    <Box key="sync" flexDirection="column" marginTop={1}>
+      <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
+        {v.status === 'signedIn'
+          ? [
+              <Text key="who" color="inactive">{`Synced across devices · last sync ${agoText(v.last, clockNow)}`}</Text>,
+              <Button key="sync-settings" plain dimColor label="⚙ Settings" onPress={() => void openSyncPane($)} />,
+            ]
+          : [<Button key="sync-enable" plain label="Click here to enable sync between devices" dimColor
+              onPress={() => void signIn(syncIO($))} />]}
+      </Box>
+      {v.note && <Text dimColor>{v.note}</Text>}
+    </Box>
+  )
 }
 
 /** Opens the pane, and asks for the device list if it wasn't asked for just now. */
@@ -517,6 +617,20 @@ export const register: Register = (on, options) => {
     )
   })
 
+  // the sync settings: their own pane, opened from the main pane's cog
+  on('ui.render', { component: 'Pane', requestId: SYNC_PANE }, async ($, e) => {
+    const els = $.ui.resolve(e)
+    const { Box, Text } = els
+    const v = await read($, syncView)
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Sync across devices</Text>
+        <Text dimColor>Your usage history, shared between the computers you sign in on. Usage figures only: never prompts or code.</Text>
+        {syncPanel($, els, v, await $.clock.now())}
+      </Box>
+    )
+  })
+
   // B: the side pane
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, steps: stepList } = await models($)
@@ -528,25 +642,47 @@ export const register: Register = (on, options) => {
     // the terminal draws no Svg: there the cards are text
     const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
     // both cards fit the pane: charts drawn at its width, sharing the height that's left
-    const size = fit(e.props.bodyColumns)
+    const wide = fit(e.props.bodyColumns)
     const lastOf = (m: Model) => (m.kind === 'week' ? lastWeek : lastFive)
-    const cardDrawing = (m: Model) => emptyChartText(m, now) ? emptyChartSvg(m, now, size.width, pal)
-      : m.kind === 'week' ? weekChart(m, now, size.width, pal, size.weekHeight) : fiveChart(m, now, size.width, pal, size.fiveHeight)
-    // a card's explanation behind a Details button, a paragraph a line; nothing to say, no button
+    // the charts take what's left of the pane's height once everything else is placed, so it all fits without
+    // scrolling where it can. The other drawings are measured; the native parts (padding, gaps, buttons, the sync
+    // rows) are counted in rows, a row CELL_PX.h pixels: an estimate, so a little may still scroll
     const open = await read($, details)
-    const detailsBlock = (key: string, paragraphs: string[]) => {
-      if (!paragraphs.length) return null
-      const isOpen = open.includes(key)
-      return (
-        <Box key={`details-${key}`} flexDirection="column" gap={1}>
-          <Box flexDirection="row" justifyContent="flex-end">
-            <Button key={`details-btn-${key}`} plain dimColor label={isOpen ? 'Hide details' : 'Details'}
-              onPress={() => void update($, details, l => (l.includes(key) ? l.filter(k => k !== key) : [...l, key]))} />
-          </Box>
-          {isOpen && paragraphs.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
+    // drawings are laid out ZOOM times narrower than the card and shown ZOOM times larger
+    const lw = (width: number) => Math.round(width / ZOOM)
+    const others = ZOOM * [
+      ...[week, five].filter((m): m is Model => !!m).flatMap(m => [
+        headerSvg(m, m.kind === 'week' ? 'This week' : '5-hour window', lw(wide.width), pal, resetsIn(m), lastOf(m)),
+      ]),
+      modelsHead(learned, now, pal).svg,
+      // the full models card only while its Details is open
+      ...(open.includes('models') ? [modelsCosts(learned, baselineOf(learned, s.baseline), lw(wide.width), pal)] : []),
+      ...(open.includes('models') && week ? (() => { const sp0 = spend(week, learned, stepList, now); return sp0 ? [modelsSpend(sp0, lw(wide.width), pal)] : [] })() : []),
+    ].reduce((a, svg) => a + drawingHeight(svg), 0)
+    // the cards' padding, gaps and button rows, the models line, the sync line; an open Details adds its text
+    const nativeRows = 20 + ['week', 'five', 'models'].filter(k => open.includes(k)).length * 5
+    const rows = e.props.scroll?.bodyRows
+    const size = Svg && rows ? fitHeight(wide, rows * CELL_PX.h - others - nativeRows * CELL_PX.h) : wide
+    const W = lw(size.width)
+    const cardDrawing = (m: Model) => emptyChartText(m, now) ? emptyChartSvg(m, now, W, pal)
+      : m.kind === 'week' ? weekChart(m, now, W, pal, Math.round(size.weekHeight / ZOOM)) : fiveChart(m, now, W, pal, Math.round(size.fiveHeight / ZOOM))
+    // a card's explanation behind a Details button, a paragraph a line; nothing to say, no button
+    // the button, to sit in a row with whatever else is there, and the text it opens, under that row
+    const detailsButton = (key: string, paragraphs: string[]) => (paragraphs.length
+      ? <Button key={`details-btn-${key}`} plain dimColor label={open.includes(key) ? 'Hide details' : 'Details'}
+          onPress={() => void update($, details, l => (l.includes(key) ? l.filter(k => k !== key) : [...l, key]))} />
+      : null)
+    const detailsText = (key: string, paragraphs: string[]) => (paragraphs.length && open.includes(key)
+      ? <Box key={`details-${key}`} flexDirection="column" gap={1}>
+          {paragraphs.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
         </Box>
-      )
-    }
+      : null)
+    const detailsBlock = (key: string, paragraphs: string[]) => (paragraphs.length
+      ? <Box key={`details-block-${key}`} flexDirection="column" gap={1}>
+          <Box flexDirection="row" justifyContent="flex-end">{detailsButton(key, paragraphs)}</Box>
+          {detailsText(key, paragraphs)}
+        </Box>
+      : null)
     // the head's figures in words, for a drawing's alt text
     const figuresText = (m: Model) =>
       `At reset ${leftText(m)}, your pace ${m.noData ? 'no data' : rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`
@@ -557,9 +693,10 @@ export const register: Register = (on, options) => {
     // again on every redraw, a scroll's too, and that flashed. A plain function, not a component, each drawing keyed;
     // its height left out, so it follows the drawing's proportions at whatever width it's shown
     const draw = (key: string, svg: string, alt: string) =>
-      Svg ? <Svg key={key} source={asImage(svg, size.width)} alt={alt} /> : null
+      Svg ? <Svg key={key} source={asImage(svg, W)} alt={alt} /> : null
     const block = (title: string, m: Model, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
       const last = lastOf(m)
+      const info = last ? [LAST_INFO, lastWindowNote(last)] : []
       return (
       <Box
         key={`block-${m.kind}`}
@@ -574,7 +711,7 @@ export const register: Register = (on, options) => {
         {/* the countdown is drawn in the head, at its right, so its text takes the drawing's styles */}
         <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
           {Svg ? (
-            draw(`head-${m.kind}`, headerSvg(m, title, size.width, pal, resetsIn(m), last),
+            draw(`head-${m.kind}`, headerSvg(m, title, W, pal, resetsIn(m), last),
               `${title}. ${resetsIn(m)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}${figuresText(m)} ${lastAlt(last)}`)
           ) : (
             <Box flexDirection="column">
@@ -596,20 +733,23 @@ export const register: Register = (on, options) => {
           )}
           {!Svg && <Text dimColor>{resetsIn(m)}</Text>}
         </Box>
-        {/* the chart and its controls are one unit: the controls stay right under the chart */}
-        <Box key={`graph-${m.kind}`} flexDirection="column" gap={1}>
-          {chart && Svg && (
-            draw(`chart-${m.kind}`, chart, `${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`}`)
-          )}
-          {controls}
-        </Box>
-        <Box flexDirection="column" marginTop={controls ? 1 : 0}>
-          {notes.map((note, i) => (Svg
-            ? draw(`note-${m.kind}-${i}`, noteSvg(note, size.width, pal), note)
-            : <Text color="inactive">{note}</Text>))}
-        </Box>
-        {/* what Last window means, behind a Details button: the drawings carry no tooltip */}
-        {detailsBlock(m.kind, last ? [LAST_INFO, lastWindowNote(last)] : [])}
+        {chart && Svg && (
+          draw(`chart-${m.kind}`, chart, `${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`}`)
+        )}
+        {/* under the chart, the note, the controls and Details share a row, wrapping only when there's no room */}
+        {(notes.length > 0 || controls || info.length > 0) && (
+          <Box key={`foot-${m.kind}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={1}>
+            <Box flexDirection="column" flexShrink={1}>
+              {notes.map((note, i) => <Text key={`note-${m.kind}-${i}`} color="inactive">{note}</Text>)}
+            </Box>
+            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
+              {controls}
+              {detailsButton(m.kind, info)}
+            </Box>
+          </Box>
+        )}
+        {/* what Last window means, opened by Details: the drawings carry no tooltip */}
+        {detailsText(m.kind, info)}
       </Box>
       )
     }
@@ -648,21 +788,35 @@ export const register: Register = (on, options) => {
     const sp = week ? spend(week, learned, stepList, now) : null
     const shown = learned.models.filter(m => m.shown)
     const names = shortNames(shown)
+    // the models card is compact until its Details is opened: one line, each model's cost against the baseline
+    const modelsOpen = open.includes('models')
+    const modelsSummary = learned.models.length === 0 ? 'Learning from your responses.'
+      : learned.models.map(m => {
+          const name = names.get(m.id) ?? m.name
+          if (!m.shown) return `${name} learning`
+          if (!base || m === base) return `${name} 1×`
+          return `${name} ${ratio(m, base).x}`
+        }).join(' · ')
     const modelsCard = (
       <Box key="block-models" flexDirection="column" gap={1} marginBottom={1} padding={2} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
         {Svg ? (
           // a column like the card's own, so a part left out (no baseline, no spend yet) is simply not there
           <Box flexDirection="column" gap={1}>
             {draw('models-head', modelsHead(learned, now, pal).svg, 'Models')}
-            {draw('models-costs', modelsCosts(learned, base, size.width, pal), `Models. ${modelsText(learned, base, null).join(' ')}`)}
-            {base && (
+            {/* compact: a line of each model's cost, and Details for the full card (rows, compare, this week, what it means) */}
+            <Box key="models-compact" flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={1}>
+              <Text key="models-summary" color="inactive">{modelsSummary}</Text>
+              {detailsButton('models', ['full'])}
+            </Box>
+            {modelsOpen && draw('models-costs', modelsCosts(learned, base, W, pal), `Models. ${modelsText(learned, base, null).join(' ')}`)}
+            {modelsOpen && base && (
               <Box flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={1} rowGap={1}>
                 <Text color="inactive">Compare with</Text>
                 {shown.map(m => seg(`base-${m.id}`, names.get(m.id) ?? m.name, m === base, () => void choose($, { baseline: m.id })))}
               </Box>
             )}
-            {sp && draw('models-spend', modelsSpend(sp, size.width, pal), modelsText({ ...learned, models: [] }, null, sp).join(' '))}
-            {detailsBlock('models', MODELS_INFO.split('\n').filter(Boolean))}
+            {modelsOpen && sp && draw('models-spend', modelsSpend(sp, W, pal), modelsText({ ...learned, models: [] }, null, sp).join(' '))}
+            {modelsOpen && <Text key="models-info" dimColor>{MODELS_INFO}</Text>}
           </Box>
         ) : (
           <Box flexDirection="column">
@@ -679,60 +833,8 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    // sync across devices: one quiet row under the cards, the same on every surface
-    const syncRow = (v: RangeSync) => {
-      return (
-        <Box key="sync" flexDirection="column" gap={1} marginTop={1}>
-          {/* the row's parts as one flat list: a fragment here is drawn as a column of its own on the desktop */}
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={1}>
-            {v.status === 'signedIn'
-              ? [
-                  <Text key="who" color="inactive">{`Synced as ${v.email || 'you'} · last sync ${agoText(v.last, clockNow)} ·`}</Text>,
-                  <Button key="sync-signout" label="Sign out" dimColor={!!v.busy} onPress={() => void signOut(syncIO($))} />,
-                  <Button key="sync-delete" label={v.confirmDelete ? 'Press again to delete all synced data' : 'Delete synced data'}
-                    variant={v.confirmDelete ? 'primary' : 'secondary'} dimColor={!!v.busy} onPress={() => void deleteSynced(syncIO($))} />,
-                ]
-              : v.status === 'waiting'
-                ? [
-                    <Text key="waiting" color="inactive">{`Waiting for sign-in… code ${v.code ?? ''} ·`}</Text>,
-                    <Button key="sync-cancel" label="Cancel" onPress={() => void cancelSignIn(syncIO($))} />,
-                  ]
-                : [
-                    <Text key="title" color="inactive">{v.status === 'off' ? 'Sync across devices · off' : 'Sync across devices ·'}</Text>,
-                    ...(v.status === 'off' ? [] : [<Button key="sync-signin" label="Sign in" dimColor={!!v.busy} onPress={() => void signIn(syncIO($))} />]),
-                  ]}
-          </Box>
-          {/* the devices signed in to this account, this one first: any other one can be removed */}
-          {v.status === 'signedIn' && v.devices && v.devices.length > 0 && (
-            <Box key="devices" flexDirection="column">
-              <Text key="devices-title" color="inactive">Linked devices</Text>
-              {v.devices.map(d => (
-                <Box key={`device-${d.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
-                  {d.current
-                    ? [<Text key="name">{`${deviceLabel(d)} · this device`}</Text>]
-                    : [
-                        <Text key="name">{`${deviceLabel(d)} · last seen ${d.lastSeenAt === undefined ? 'never' : agoText(d.lastSeenAt, clockNow)} ·`}</Text>,
-                        <Button key={`sync-remove-${d.id}`}
-                          label={v.confirmRemove === d.id ? `Press again to remove ${deviceLabel(d)} and its synced data` : 'Remove'}
-                          variant={v.confirmRemove === d.id ? 'primary' : 'secondary'} dimColor={!!v.busy}
-                          onPress={() => void removeDevice(syncIO($), d.id)} />,
-                      ]}
-                </Box>
-              ))}
-            </Box>
-          )}
-          {/* the page to sign in on, where the code is typed: as a link, and as text to copy */}
-          {v.status === 'waiting' && v.url && (
-            <Box flexDirection="column">
-              {/* the link inside a Text, as the inline element it is; the address again as plain text to copy */}
-              <Text>Open <Link href={v.url} label="the sign-in page" /> and enter the code {v.code ?? 'shown above'}.</Text>
-              <Text dimColor>{v.url}</Text>
-            </Box>
-          )}
-          {v.note && <Text dimColor>{v.note}</Text>}
-        </Box>
-      )
-    }
+    // sync: one quiet line here; everything else is in its own pane, opened from the cog
+    const syncRow = (v: RangeSync) => syncLine($, els, v, clockNow)
 
     if (!week && !five) {
       return (

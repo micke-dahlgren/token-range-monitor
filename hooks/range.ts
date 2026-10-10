@@ -872,7 +872,7 @@ export function withInfo(head: { svg: string; height: number; info?: InfoSpot },
  * A cell of the desktop's code font in CSS pixels, as measured in the Code
  * tab: the pane reports its width in these cells, the drawings are in pixels.
  */
-export const CELL_PX = { w: 9.5 }
+export const CELL_PX = { w: 9.5, h: 19 }
 
 export type Fit = { width: number; weekHeight: number; fiveHeight: number }
 
@@ -891,6 +891,21 @@ export function fit(columns: number): Fit {
   // follow the card's width instead: a wider card, a taller chart, within bounds
   const tall = (k: 'week' | 'five') => Math.round(Math.min(CHART_H[k].max, Math.max(CHART_H[k].min, width * CHART_H[k].ratio)))
   return { width, weekHeight: tall('week'), fiveHeight: tall('five') }
+}
+
+/** The least a chart is drawn at to fit the pane's height: below this it stops being readable, and the pane scrolls. */
+const CHART_MIN_FIT = { week: 200, five: 160 }
+
+/**
+ * The charts' heights fitted to the pane's height: `budget` pixels are what's
+ * left for the two charts once everything else is placed. They share it in
+ * their width-based proportions, growing into spare room up to CHART_H's
+ * max, shrinking in a short pane down to CHART_MIN_FIT, below which it scrolls.
+ */
+export function fitHeight(f: Fit, budget: number): Fit {
+  const total = f.weekHeight + f.fiveHeight
+  const share = (k: 'week' | 'five', h: number) => Math.round(Math.min(CHART_H[k].max, Math.max(CHART_MIN_FIT[k], (budget * h) / total)))
+  return { ...f, weekHeight: share('week', f.weekHeight), fiveHeight: share('five', f.fiveHeight) }
 }
 const pctText = (v: number) => (v > 0 && v < 1 ? '<1%' : `${Math.round(v)}%`)
 

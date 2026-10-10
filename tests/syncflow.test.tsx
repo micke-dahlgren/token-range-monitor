@@ -116,15 +116,29 @@ const start = (s: { session: { start: (e: never) => Promise<unknown> } }) =>
 
 const surfaces = ['terminal', 'desktop'] as const
 
+/**
+ * The main pane and the sync settings pane side by side, searched as one: the sync line is in the main pane, its
+ * controls (sign out, delete, the devices) in the settings pane, and a test asks about either.
+ */
+async function mountPane($: { ui: { mount: (o: never) => Promise<any> } }, surface: 'terminal' | 'desktop') {
+  const props = { isFocused: false, bodyColumns: 100, placement: 'dock' }
+  const main = await $.ui.mount({ plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor', props: { title: 'Token Range Monitor', ...props } } as never)
+  const sync = await $.ui.mount({ plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor-sync', props: { title: 'Sync settings', ...props } } as never)
+  return {
+    main, sync,
+    find: async (q: object) => (await main.find(q)) ?? (await sync.find(q)),
+    findAll: async (q: object) => [...(await main.findAll(q)), ...(await sync.findAll(q))],
+    press: async (q: object) => ((await main.find(q)) ? main.press(q) : sync.press(q)),
+    unmount: async () => { await main.unmount(); await sync.unmount() },
+  }
+}
+
 test("signed in: this computer's lists go up as one list per day, another device's come down into the record", async ($, on) => {
   const server = new FakeServer({ 'd:other1-20261010': [FAR, [[T0 - 3 * HOUR, T0 - HOUR]], [FAR_STEP]] })
   server.page = 1
   const clock = world(on, server, { 'sync:auth': AUTH })
   await start($)
-  const pane = await $.ui.mount({
-    plugin: 'token-range-monitor', surface: 'terminal', component: 'Pane', requestId: 'token-range-monitor',
-    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-  })
+  const pane = await mountPane($, 'terminal')
   // nothing synced yet: only the 5-hour window seen here
   expect(await pane.find({ type: 'Text', text: 'No weekly limit reported.' })).toBeDefined()
 
@@ -183,10 +197,7 @@ test('a token the server no longer knows signs this device out, and the download
   const clock = world(on, server, { 'sync:auth': AUTH })
   await start($)
   await clock.advance(1_000)
-  const pane = await $.ui.mount({
-    plugin: 'token-range-monitor', surface: 'terminal', component: 'Pane', requestId: 'token-range-monitor',
-    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-  })
+  const pane = await mountPane($, 'terminal')
   expect(await pane.find({ type: 'Text', text: 'This week' })).toBeDefined()
 
   server.fail = r => (r.auth ? [401, { error: 'device_expired', message: 'unused' }] : undefined)
@@ -207,10 +218,7 @@ test('a busy or unreachable server is asked again later and later; the record go
   server.fail = () => [503, { error: 'over_capacity' }]
   await start($)
   await clock.advance(1_000)
-  const pane = await $.ui.mount({
-    plugin: 'token-range-monitor', surface: 'desktop', component: 'Pane', requestId: 'token-range-monitor',
-    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-  })
+  const pane = await mountPane($, 'desktop')
   expect(await pane.find({ type: 'Text', text: /over its free daily limit; trying again in 2 min/ })).toBeDefined()
   expect(server.reqs).toHaveLength(1)
   await clock.advance(MIN)
@@ -238,10 +246,7 @@ test('a cursor the server cannot read starts the download over', async ($, on) =
   await start($)
   await clock.advance(1_000)
   expect(server.reqs.filter(r => r.method === 'GET' && r.path === '/v1/lists').map(r => r.query.since)).toEqual(['garbage', undefined])
-  const pane = await $.ui.mount({
-    plugin: 'token-range-monitor', surface: 'terminal', component: 'Pane', requestId: 'token-range-monitor',
-    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-  })
+  const pane = await mountPane($, 'terminal')
   expect(await pane.find({ type: 'Text', text: 'This week' })).toBeDefined()
   await pane.unmount()
 })
@@ -253,26 +258,17 @@ test('signing in: a code and a page, asked at the interval until it says yes, th
   await clock.advance(1_000)
   expect(server.reqs).toHaveLength(0)
   for (const surface of surfaces) {
-    const pane = await $.ui.mount({
-      plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor',
-      props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-    })
+    const pane = await mountPane($, surface)
     expect(await pane.find({ type: 'Text', text: 'Sync across devices' })).toBeDefined()
     expect((await pane.find({ key: 'sync-signin' }))?.props.label).toBe('Sign in')
     await pane.unmount()
   }
 
-  const pane = await $.ui.mount({
-    plugin: 'token-range-monitor', surface: 'terminal', component: 'Pane', requestId: 'token-range-monitor',
-    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-  })
+  const pane = await mountPane($, 'terminal')
   await pane.press({ key: 'sync-signin' })
   expect(server.reqs[0]).toMatchObject({ method: 'POST', path: '/v1/link/start', body: { deviceName: 'testbox' } })
   for (const surface of surfaces) {
-    const p = surface === 'terminal' ? pane : await $.ui.mount({
-      plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor',
-      props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-    })
+    const p = surface === 'terminal' ? pane : await mountPane($, surface)
     expect(await p.find({ type: 'Text', text: 'Waiting for sign-in… code ABCD-EFGH' })).toBeDefined()
     expect(await p.find({ key: 'sync-cancel' })).toBeDefined()
     // the page's address carries no code: it is typed there
@@ -292,10 +288,7 @@ test('signing in: a code and a page, asked at the interval until it says yes, th
   expect(server.count('POST', '/v1/link/poll')).toBe(2)
   expect(server.reqs.find(r => r.method === 'GET')?.auth).toBe('Bearer tok')
   for (const surface of surfaces) {
-    const p = surface === 'terminal' ? pane : await $.ui.mount({
-      plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor',
-      props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-    })
+    const p = surface === 'terminal' ? pane : await mountPane($, surface)
     expect(await p.find({ type: 'Text', text: /^Synced as me@example\.com · / })).toBeDefined()
     expect(await p.find({ type: 'Text', text: /last sync just now/ })).toBeDefined()
     expect((await p.find({ key: 'sync-signout' }))?.props.label).toBe('Sign out')
@@ -324,10 +317,7 @@ test('a code nobody signs in with expires, and Cancel stops asking', async ($, o
   server.polls = ['pending', 'expired']
   const clock = world(on, server)
   await start($)
-  const pane = await $.ui.mount({
-    plugin: 'token-range-monitor', surface: 'desktop', component: 'Pane', requestId: 'token-range-monitor',
-    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-  })
+  const pane = await mountPane($, 'desktop')
   await pane.press({ key: 'sync-signin' })
   await clock.advance(6_000)
   expect(await pane.find({ type: 'Text', text: /code expired/ })).toBeDefined()
@@ -349,10 +339,7 @@ test('deleting the synced data takes a second press', async ($, on) => {
   const clock = world(on, server, { 'sync:auth': AUTH })
   await start($)
   await clock.advance(1_000)
-  const pane = await $.ui.mount({
-    plugin: 'token-range-monitor', surface: 'terminal', component: 'Pane', requestId: 'token-range-monitor',
-    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-  })
+  const pane = await mountPane($, 'terminal')
   await pane.press({ key: 'sync-delete' })
   expect(server.count('DELETE', '/v1/me')).toBe(0)
   expect((await pane.find({ key: 'sync-delete' }))?.props.label).toBe('Press again to delete all synced data')
@@ -374,10 +361,7 @@ test('with nonessential traffic turned off, sync is off and says so', async ($, 
   await clock.advance(30 * MIN)
   expect(server.reqs).toHaveLength(0)
   for (const surface of surfaces) {
-    const pane = await $.ui.mount({
-      plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor',
-      props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
-    })
+    const pane = await mountPane($, surface)
     expect(await pane.find({ type: 'Text', text: 'Sync across devices' })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: 'off' })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC/ })).toBeDefined()
@@ -386,11 +370,6 @@ test('with nonessential traffic turned off, sync is off and says so', async ($, 
   }
 })
 
-const mountPane = ($: { ui: { mount: (o: never) => Promise<any> } }, surface: 'terminal' | 'desktop') =>
-  $.ui.mount({
-    plugin: 'token-range-monitor', surface, component: 'Pane', requestId: 'token-range-monitor',
-    props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' },
-  } as never)
 
 test('signed in, the pane lists the devices: this one first with no Remove, the others with when they were last seen', async ($, on) => {
   const server = new FakeServer()

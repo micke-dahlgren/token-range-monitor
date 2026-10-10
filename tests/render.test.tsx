@@ -55,12 +55,16 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   })
   expect(await pane.find({ type: 'Svg' })).toBeDefined()
   // the models card follows the two limits' cards, still learning with no responses seen
+  // compact until its Details opens: a summary line, then the full card
+  expect(await pane.find({ type: 'Text', text: /^Learning from your responses.$|learning|×/ })).toBeDefined()
+  expect((await pane.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('Models.'))).toBe(false)
+  await pane.press({ key: 'details-btn-models' })
   expect((await pane.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('Models.'))).toBe(true)
+  await pane.press({ key: 'details-btn-models' })
   expect(String((await pane.find({ type: 'Svg' }))?.props.alt)).toMatch(/Runs out in /)
   // the selector is native widgets: press the buttons, type into the field
-  // the note is drawn, so it reads from the drawing's alt text
-  const note = async () => (await pane.findAll({ type: 'Svg' }))
-    .map(x => String(x.props.alt)).find(alt => /^Average (over the last|since)/.test(alt) && !/, safe pace /.test(alt))
+  // the note is text, beside the controls
+  const note = async () => (await pane.find({ type: 'Text', text: /^Average (over the last|since)/ }))?.children?.join('') as string | undefined
   const press = (key: string) => pane.press({ key })
 
   // a fresh install averages since the reset, with no window row
@@ -106,7 +110,10 @@ test('the band and the pane draw on the desktop', async ($, on) => {
     for (const x of all) {
       expect(x.props.isInteractive).toBeFalsy()
       expect(x.props.height).toBeUndefined()
-      expect(String(x.props.source)).toMatch(/^<svg [^>]*width="(\d+)" height="(\d+)" viewBox="0 0 \1 \2"/)
+      // shown one step larger than laid out: the size is the viewBox's times 1.125, both ways
+      const [, w, h, vw, vh] = /^<svg [^>]*width="(\d+)" height="(\d+)" viewBox="0 0 (\d+) (\d+)"/.exec(String(x.props.source))!.map(Number)
+      expect(Math.abs(w! / vw! - 1.125)).toBeLessThan(0.01)
+      expect(Math.abs(h! / vh! - 1.125)).toBeLessThan(0.02)
       expect(String(x.props.source)).not.toContain('class="info"')
       // every text placed: no empty coordinates
       expect(String(x.props.source)).not.toMatch(/ [xy]=""/)
@@ -114,10 +121,15 @@ test('the band and the pane draw on the desktop', async ($, on) => {
     // the weekly drawing (head and chart, with its plot) by its height
     return all.filter(x => String(x.props.source).includes('id="plot"')).map(x => Number(/^<svg [^>]* height="(\d+)"/.exec(String(x.props.source))![1]))
   }
-  const narrow = await charts(60, 50), wide = await charts(160, 50), wideTaller = await charts(160, 120)
-  // the chart's height follows the card's width, not the pane's reported rows
-  expect(wide[0]!).toBeGreaterThan(narrow[0]! + 60)
-  expect(wideTaller[0]).toBe(wide[0])
+  // the charts fill the pane's height: a tall pane grows them to their most, never beyond
+  const tall = await charts(160, 300)
+  expect(tall[0]).toBe(440)
+  expect((await charts(160, 600))[0]).toBe(440)
+  // a shorter pane shrinks them to fit, down to their least, below which the pane scrolls
+  const mid = await charts(160, 50), short = await charts(160, 30), tiny = await charts(160, 10)
+  expect(mid[0]!).toBeLessThan(tall[0]!)
+  expect(short[0]!).toBeLessThanOrEqual(mid[0]!)
+  expect(tiny[0]).toBe(200)
 })
 
 test('both cards show the last window, on the desktop and in the terminal', async ($, on) => {
