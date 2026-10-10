@@ -542,8 +542,10 @@ export const register: Register = (on, options) => {
     // one dark card per limit, as on the car's display: head, chart, controls, then the notes
     // every drawing in a frame as wide as the card, given its height: it fills the width, and its text keeps its size
     // a plain function, not a component, and each drawing keyed: the surface then updates a drawing in place
+    // only a drawing with an info circle is drawn interactive (a sandboxed frame, for its hover tooltip): the surface
+    // loads a frame again on every redraw, a scroll's too, and that flashes, where a plain image is kept
     const draw = (key: string, svg: string, alt: string) =>
-      Svg ? <Svg key={key} source={svg} height={drawingHeight(svg)} isInteractive alt={alt} /> : null
+      Svg ? <Svg key={key} source={svg} height={drawingHeight(svg)} isInteractive={svg.includes('class="info"')} alt={alt} /> : null
     // `chart` may hold the head too (a card with its last window): then no separate head is drawn
     const block = (title: string, m: Model, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
       const headInChart = !!chart?.includes('class="info"')

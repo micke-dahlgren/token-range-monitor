@@ -94,7 +94,8 @@ test('the band and the pane draw on the desktop', async ($, on) => {
     await p.unmount()
     // every drawing fills its frame's width at its own height: framed, its height given, no scaling viewBox
     for (const x of all) {
-      expect(x.props.isInteractive).toBe(true)
+      // a frame only where an info circle needs its hover tooltip; the rest are plain images, which don't flash on redraws
+      expect(x.props.isInteractive).toBe(String(x.props.source).includes('class="info"'))
       expect(String(x.props.source)).not.toContain('viewBox')
       expect(String(x.props.source)).toContain(':root{width:100%')
       // every text placed: no empty coordinates
