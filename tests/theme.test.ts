@@ -21,7 +21,7 @@ test('the dark and light palettes come from the presets and read on their card',
   for (const p of [dark, light]) {
     expect(contrast(rgb(p.fg), rgb(p.card))).toBeGreaterThanOrEqual(7)
     expect(contrast(rgb(p.dim), rgb(p.card))).toBeGreaterThanOrEqual(4.5)
-    for (const c of [p.limit, p.under, p.bad, p.over]) expect(contrast(rgb(c), rgb(p.card))).toBeGreaterThanOrEqual(3)
+    for (const c of [p.limit, p.under, p.bad, p.good, p.over]) expect(contrast(rgb(c), rgb(p.card))).toBeGreaterThanOrEqual(3)
   }
 })
 

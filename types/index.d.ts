@@ -28,6 +28,8 @@ export type RangeSettings = { mode: 'window' | 'reset'; n: number; unit: 'h' | '
 export type Palette = {
   card: string; veil: string; fg: string; dim: string; off: string
   barTop: string; barBottom: string; limit: string; over: string; under: string; bad: string
+  /** A figure "… to spare": the only place green is used. */
+  good: string
   /** A colour per model family. */
   fable: string; opus: string; sonnet: string; haiku: string
   /** The card's surfaces, as the pane's design names them: the card, a raised chip, the inset strip, the panel within. */

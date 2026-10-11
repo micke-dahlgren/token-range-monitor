@@ -30,10 +30,10 @@ claude plugin update token-range-monitor
 
 > Week **6% to spare**, resets in 4d 13h · 5h **cut off ~00:09**, resets 00:40 · Details ↗
 
-- **Week:** what's projected to be left at the weekly reset, in Claude's orange: **6% to spare**. If you won't make it, it says in red when you'd run out and how long before the reset: **runs out Wed ~12:45**, 22h early.
+- **Week:** what's projected to be left at the weekly reset, in green: **6% to spare**. If you won't make it, it says in Claude's orange when you'd run out and how long before the reset: **runs out Wed ~12:45**, 22h early.
 - **±N** follows the figure when the projection has typically missed by more than 5 points: `Week 9% to spare ±12`.
 - **early** follows it until a whole day is on record (just after you install). Until then it's the older hourly estimate.
-- **5h:** in clock times. **cut off ~00:09** in red if you'd hit the 5-hour limit before it resets, or **55% to spare** in orange, then when it resets.
+- **5h:** in clock times. **cut off ~00:09** in orange if you'd hit the 5-hour limit before it resets, or **55% to spare** in green, then when it resets.
 - In a narrow terminal it shortens to stay on one line: `Week +6% 4d 13h · 5h out 00:09 · Details`.
 - **Details** opens the pane.
 
@@ -53,7 +53,7 @@ claude plugin update token-range-monitor
 
 The **Details** strip under the card opens the older view: its figures (what's left at the reset, your pace, the safe pace, **Last window**), the chart of your usage, and the choice of what its average covers (**Since reset**, or a custom 1–24 hours or 1–7 days).
 
-**5-hour window** (100% = your 5-hour limit): "Cut off ~17:36 at this pace", or "Lasts to the reset at 15:40", and a line from the window's opening to its reset, with now and the cut-off marked and the time past the cut-off tinted red. Its **Details** opens the older view, as the weekly card's does.
+**5-hour window** (100% = your 5-hour limit): "Cut off ~17:36 at this pace", or "Lasts to the reset at 15:40", and the window's use as one bar, in % of the 5-hour limit: what's used, solid, and what your pace adds before the reset, striped. Its **Details** opens the older view, as the weekly card's does.
 
 **Models** shows each model's cost in one line; its **Details** opens what each model costs and where your week went:
 

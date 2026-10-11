@@ -130,10 +130,10 @@ function legible(c: RGB, bg: RGB, toward: RGB, min: number): RGB {
 export type PaletteKey = keyof Palette
 
 /** The design's inks for each appearance: what the built-in presets draw with. */
-type Inks = Pick<Palette, 'fg' | 'muted' | 'faint' | 'accent' | 'bad' | 'solid' | 'fable' | 'opus' | 'sonnet' | 'haiku'>
+type Inks = Pick<Palette, 'fg' | 'muted' | 'faint' | 'accent' | 'good' | 'solid' | 'fable' | 'opus' | 'sonnet' | 'haiku'>
 const DESIGN: { dark: Inks; light: Inks } = {
-  dark: { fg: '#f2efeb', muted: '#aaa7a3', faint: '#8e8a85', accent: '#df9a7c', bad: '#e7a19b', solid: '#a9a5a0', fable: '#cdb39c', opus: '#df9a7c', sonnet: '#b9ada1', haiku: '#999590' },
-  light: { fg: '#302e2b', muted: '#716b64', faint: '#807970', accent: '#a85f42', bad: '#ae504b', solid: '#aaa197', fable: '#8f6a52', opus: '#a85f42', sonnet: '#827365', haiku: '#8d8780' },
+  dark: { fg: '#f2efeb', muted: '#aaa7a3', faint: '#8e8a85', accent: '#df9a7c', good: '#86c294', solid: '#a9a5a0', fable: '#cdb39c', opus: '#df9a7c', sonnet: '#b9ada1', haiku: '#999590' },
+  light: { fg: '#302e2b', muted: '#716b64', faint: '#807970', accent: '#a85f42', good: '#3f7d4c', solid: '#aaa197', fable: '#8f6a52', opus: '#a85f42', sonnet: '#827365', haiku: '#8d8780' },
 }
 /**
  * The design's tones within a card, as overlays on whatever the card is: a raised chip, the panel inside a
@@ -149,8 +149,8 @@ const same = (a: RGB, b: RGB) => a.every((v, i) => Math.abs(v - b[i]!) < 1)
 /**
  * The card's palette from one appearance's tokens. The card is the theme's message background and the
  * veil behind a label its inverse text colour; the built-in presets' inks are the design's own warm ones,
- * and a theme that sets its own colours carries them over: its text, its Claude colour as the accent, its
- * error colour for what's short. Every colour that carries meaning is nudged toward the text colour until
+ * and a theme that sets its own colours carries them over: its text, its Claude colour as the accent and
+ * for what's short, its success colour for what lasts. Every colour that carries meaning is nudged toward the text colour until
  * it reads on the card. The older keys (dim, off, barTop, ...) name the same colours for the 1.3 charts.
  */
 export function derivePalette(t: Tokens): Palette {
@@ -165,7 +165,9 @@ export function derivePalette(t: Tokens): Palette {
   const text = ink('text', d.fg)
   const on = (x: RGB, min: number) => hex(legible(x, card, text, min))
   const accent = on(ink('claude', d.accent), 3)
-  const bad = on(ink('error', d.bad), 3)
+  // what's short reads in the accent's amber; green is only for a figure "… to spare"
+  const bad = accent
+  const good = on(ink('success', d.good), 3)
   const muted = on(ink('inactive', d.muted), 4.5)
   const tones = TONES[look]
   return {
@@ -180,6 +182,7 @@ export function derivePalette(t: Tokens): Palette {
     over: accent,
     under: accent,
     bad,
+    good,
     surface: hex(card),
     ...tones,
     muted,

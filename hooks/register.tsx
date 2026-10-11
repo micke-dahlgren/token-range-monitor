@@ -5,15 +5,15 @@ import type { RangeCheck, RangeDay, RangeReading, RangeSettings, RangeStep, Rang
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   emptyChartSvg, emptyChartText, fit, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, merge, parseWindow, project, rateText, recordedHours, resetsIn,
-  C, dur, HOUR, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind,
+  C, dur, HOUR, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind, DAY,
 } from './range'
 import type { Average, LastWindow, Model, TrackSeg, TrackTone } from './range'
 import { DEFAULT_PALETTES, historyPalettes, palettesFor, resolveTheme } from './theme'
 import { dailyTotals, selfCheck, typicalMiss, weekPlan } from './pace'
 import type { WeekPlan } from './pace'
 import {
-  daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, fiveSummary, mastheadSvg, oldFigures, one, partsWidth, pastDays,
-  showsToday, todaySvg, todayText, weekBarLabels, weekCardSvg, weekHead, weekLegendSvg, weekPart,
+  cutOff, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
+  showsToday, toCome, todaySvg, todayText, weekBarLabels, weekCardSvg, weekHead, weekHeadline, weekLegendSvg, weekPart,
 } from './cards'
 import type { Run } from './ui'
 import { baselineOf, costWord, learn, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
@@ -649,7 +649,7 @@ export const register: Register = (on, options) => {
             ...(i ? [<Text key={`sep-${key}`} dimColor>·</Text>] : []),
             <Box key={`band-${key}`} flexDirection="row">
               <Text dimColor>{p.label} </Text>
-              <Text bold dimColor={p.dim} color={p.dim ? undefined : p.bad ? 'error' : 'claude'}>{p.value}</Text>
+              <Text bold dimColor={p.dim} color={p.dim ? undefined : !p.bad && p.value.includes('to spare') ? 'success' : 'claude'}>{p.value}</Text>
               {p.rest && <Text dimColor>{p.rest}</Text>}
               {p.tag && <Text key={`tag-${key}`} dimColor>{` ${p.tag}`}</Text>}
             </Box>,
@@ -762,7 +762,7 @@ export const register: Register = (on, options) => {
       const runsText = (key: string, runs: Run[]) => (
         <Box key={key} flexDirection="row" flexWrap="wrap" flexShrink={1}>
           {runs.map((r, i) => (
-            <Text key={`${key}-${i}`} color={r.fill === C.bad ? 'error' : r.fill === C.accent ? 'claude' : 'inactive'}>{r.s}</Text>
+            <Text key={`${key}-${i}`} color={r.fill === C.bad ? 'claude' : r.fill === C.good ? 'success' : 'inactive'}>{r.s}</Text>
           ))}
         </Box>
       )
@@ -834,7 +834,7 @@ export const register: Register = (on, options) => {
         draw('five-card', fiveCardSvg(five, now, W, pal), (() => { const hd = fiveHead(five, now); return `5-hour window, 100% = your 5-hour limit. ${hd.head}. ${hd.sub}` })()),
       ], {
         detailsKey: 'five',
-        summary: runsText('summary-five', fiveSummary(five)),
+        summary: <Box key="summary-five" />,
         inner: () => oldInner(five, '5-hour window', null, null),
       }) : <Text key="no-five" dimColor>No active 5-hour window.</Text>
 
@@ -872,128 +872,118 @@ export const register: Register = (on, options) => {
       )
     }
 
-    // ---- the terminal: the same figures as text, each card compact ----
+    // ---- the terminal: the same cards as text, each with its bars ----
     const cardBox = { gap: 0, marginBottom: 0, paddingX: 1 }
-    // the terminal's range track (see rangeTrack): each piece of text in its tone, at its exact width
-    const TONE: Record<TrackTone, { color?: 'text' | 'subtle' | 'error' | 'success' | 'suggestion'; dimColor?: boolean; bold?: boolean }> = {
-      text: { color: 'text' }, dim: { dimColor: true }, faint: { color: 'subtle' }, short: { color: 'error', bold: true },
-      ok: { color: 'success' }, unused: { color: 'suggestion' }, unusedBold: { color: 'suggestion', bold: true },
-    }
-    const segs = (key: string, list: TrackSeg[]) => list.filter(g => g.text).map((g, i) => (
-      <Box key={`${key}-${i}`} width={[...g.text].length} flexShrink={0}><Text {...TONE[g.tone]}>{g.text.trimEnd()}</Text></Box>
-    ))
     // the card's inner width: the pane's, less the border and a column of padding each side
-    const trackView = (m: Model) => {
-      const tr = rangeTrack(m, e.props.bodyColumns - 4)
-      if (!tr) return <Text key={`track-${m.kind}`} dimColor>{m.noData ?? 'No estimate yet.'}</Text>
+    const inner = Math.max(20, e.props.bodyColumns - 4)
+    /** A bar on a card's scale, 100% at its right end: what's used solid, what this pace adds shaded, the rest faint. */
+    const hbar = (key: string, used: number, to: number, bad = false) => {
+      const n = inner, u = Math.round(n * Math.max(0, Math.min(1, used / 100))), t = Math.max(u, Math.round(n * Math.max(0, Math.min(1, to / 100))))
       return (
-        <Box key={`track-${m.kind}`} flexDirection="column">
-          <Box flexDirection="row">{segs(`line-${m.kind}`, tr.line)}</Box>
-          {tr.early && <Box marginLeft={tr.early.indent}><Text {...TONE.short}>{tr.early.text}</Text></Box>}
-          {tr.unused && (
-            <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={1}>
-              <Box flexDirection="row">{segs(`unused-${m.kind}`, tr.unused.left)}</Box>
-              <Text {...TONE[tr.unused.right.tone]}>{tr.unused.right.text}</Text>
+        <Box key={key} flexDirection="row">
+          <Text color="claude">{'█'.repeat(u)}</Text>
+          <Text color="claude" dimColor={!bad}>{'▒'.repeat(t - u)}</Text>
+          <Text color="subtle">{'░'.repeat(n - t)}</Text>
+        </Box>
+      )
+    }
+    /** The line under a bar: what it shows on the left, what its 100% is on the right. */
+    const barLabels = (key: string, left: JSX.Element[], right: string) => (
+      <Box key={key} flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+        <Box flexDirection="row" flexWrap="wrap" columnGap={1}>{left}</Box>
+        <Text dimColor>{right}</Text>
+      </Box>
+    )
+    const titleRow = (key: string, title: string, right: string) => (
+      <Box key={key} flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+        <Text bold>{title}</Text>
+        <Text dimColor>{right}</Text>
+      </Box>
+    )
+    /**
+     * The days of this window as columns, in % of the weekly limit: each day's figure over its column and its
+     * name under it, past days and today solid, the days to come dim at this pace.
+     */
+    const dayColumns = (p: WeekPlan) => {
+      const open0 = p.resetsAt - 7 * DAY, early = p.basis === 'early'
+      const days = [
+        ...pastDays(p, totals).map((v, i) => ({ name: dayName(open0 + i * DAY), v, label: `${one(v)}%`, later: false, today: false })),
+        { name: dayName(p.dayStart), v: p.usedToday, label: `${one(p.usedToday)}%`, later: false, today: true },
+        ...p.later.map(d => ({ name: dayName(d.start), v: early ? 0 : d.amount, label: early ? '?' : `~${one(d.amount)}%`, later: true, today: false })),
+      ]
+      const colW = Math.max(6, Math.min(9, Math.floor(inner / days.length))), rows = 3
+      const top = Math.max(1, ...days.map(d => d.v))
+      const glyph = (v: number, row: number) => {
+        const eighths = Math.round(v / top * rows * 8) - row * 8
+        return eighths >= 8 ? '█' : eighths <= 0 ? ' ' : ' ▁▂▃▄▅▆▇'[eighths]!
+      }
+      const cell = (k: string, text: string, props: Record<string, unknown>) => (
+        <Box key={k} width={colW} flexShrink={0}><Text {...props}>{text}</Text></Box>
+      )
+      return (
+        <Box key="week-days" flexDirection="column">
+          <Box flexDirection="row">{days.map((d, i) => cell(`v${i}`, d.label, { dimColor: true }))}</Box>
+          {Array.from({ length: rows }, (_, r) => rows - 1 - r).map(row => (
+            <Box key={`r${row}`} flexDirection="row">
+              {days.map((d, i) => cell(`b${row}-${i}`, glyph(d.v, row).repeat(Math.min(4, colW - 2)), { color: 'claude', dimColor: d.later }))}
             </Box>
-          )}
+          ))}
+          <Box flexDirection="row">{days.map((d, i) => cell(`n${i}`, d.today ? `${d.name}•` : d.name, d.today ? { color: 'claude', bold: true } : { dimColor: true }))}</Box>
+        </Box>
+      )
+    }
+    // the weekly card: the week as a bar, its days as columns, then today against its budget
+    const weekCardTerm = (p: WeekPlan) => {
+      const hd = weekHeadline(p), L = weekBarLabels(p), d = todayText(p)
+      const add = p.basis === 'early' ? 0 : toCome(p)
+      return (
+        <Box key="block-week" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
+          {titleRow('week-title', 'This week', `resets ${dayTime(p.resetsAt)} · in ${dur((p.resetsAt - p.now) / HOUR)}`)}
+          <Box key="week-head" flexDirection="row" columnGap={1}>
+            <Text bold dimColor={hd.tone === 'dim'} color={hd.tone === 'dim' ? undefined : 'claude'}>{hd.head}</Text>
+            {hd.badge && <Text dimColor>{hd.badge}</Text>}
+          </Box>
+          {!p.noData && hbar('week-bar', p.pct, p.pct + add, L.addBad)}
+          {!p.noData && barLabels('week-labels', [
+            <Text key="u">{L.used}</Text>,
+            ...(L.add ? [<Text key="a" color={L.addBad ? 'claude' : undefined} dimColor={!L.addBad}>{`· ${L.add}`}</Text>] : []),
+          ], '100% = weekly limit')}
+          {!p.noData && p.pct < 100 && <Box key="week-gap" height={1} />}
+          {!p.noData && p.pct < 100 && dayColumns(p)}
+          {showsToday(p) && <Box key="today-gap" height={1} />}
+          {showsToday(p) && titleRow('today-title', 'Today', `day ends ${hm(p.dayEnd)}`)}
+          {showsToday(p) && <Text key="today-head" bold color={d.bad ? 'claude' : undefined}>{d.predicted}</Text>}
+          {showsToday(p) && hbar('today-bar', p.usedOfBudget, p.predicted, d.bad)}
+          {showsToday(p) && barLabels('today-labels', [
+            <Text key="u">{d.used}</Text>,
+            ...(d.pred ? [<Text key="p" dimColor>{`· ${d.pred}`}</Text>] : []),
+          ], `100% = today’s budget, ${one(p.budget)}% of the week`)}
+        </Box>
+      )
+    }
+    // the 5-hour card: the head, then the window's use as a bar
+    const fiveCardTerm = (m: Model) => {
+      const hd = fiveHead(m, now), cut = m.noData ? null : cutOff(m, now)
+      const proj = 100 - m.arrive, add = Math.max(0, proj - m.pct), over = proj > 100
+      return (
+        <Box key="block-five" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
+          {titleRow('five-title', '5-hour window', `opened ${hm(m.resetsAt - 5 * HOUR)} · resets ${hm(m.resetsAt)}`)}
+          <Box key="five-head" flexDirection="row" flexWrap="wrap" columnGap={1}>
+            <Text bold dimColor={hd.tone === 'dim'} color={hd.tone === 'dim' ? undefined : 'claude'}>{hd.head}</Text>
+            {!m.noData && !over && <Text>·</Text>}
+            {!m.noData && !over && <Text bold color="success">{`${Math.round(m.arrive)}% to spare`}</Text>}
+          </Box>
+          {!m.noData && hbar('five-bar', m.pct, proj, over)}
+          {!m.noData && barLabels('five-labels', [
+            <Text key="u">{`${one(m.pct)}% used`}</Text>,
+            ...(add > 0 ? [<Text key="a" color={over ? 'claude' : undefined} dimColor={!over}>{`· +${one(add)}% at this pace${over && cut !== null ? `, cut off ~${hm(cut)}` : ''}`}</Text>] : []),
+          ], '100% = 5-hour limit')}
         </Box>
       )
     }
     const detailsButton = (key: string) => (
       <Button key={`details-btn-${key}`} plain dimColor label={open.includes(key) ? 'Hide details' : 'Details'} onPress={() => toggle(key)} />
     )
-
-    /**
-     * One card: 1.4's part on top (`top`), then Details, which opens the older card for this limit: its head,
-     * track, the average's note and controls, and Last window.
-     */
-    const block = (m: Model | null, key: 'week' | 'five', top: JSX.Element[], title: string, controls: JSX.Element | null, notes: string[]) => {
-      const last = m ? lastOf(m) : null
-      // the terminal has no head drawing, so Details also carries the figures the track leaves out
-      const figures = !m ? [] : [`${m.kind === 'week' ? 'At week reset' : 'At 5h reset'} ${leftText(m)} · your pace ${m.noData ? 'no data' : rateText(m, m.rate)} · safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`]
-      const info = [...figures, ...(last ? [LAST_INFO, lastWindowNote(last)] : [])]
-      const isOpen = open.includes(key) && !!m
-      return (
-        <Box key={`block-${key}`} flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
-          {top}
-          {m && (
-            <Box key={`foot-${key}`} flexDirection="row" justifyContent="flex-end">
-              {detailsButton(key)}
-            </Box>
-          )}
-          {isOpen && m && (
-            <Box key={`old-${key}`} flexDirection="column" marginTop={1}>
-              <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-                <Text bold>{title}</Text>
-                <Text dimColor>{resetsIn(m)}</Text>
-              </Box>
-              {trackView(m)}
-              {!m.noData && (
-                <Box key={`pace-${key}`} flexDirection="row" flexWrap="wrap">
-                  <Text dimColor>Pace </Text>
-                  <Text bold color={isShort(m) ? 'error' : undefined}>{rateShort(m, m.rate)}</Text>
-                  <Text dimColor> · safe </Text>
-                  <Text>{rateShort(m, m.limit)}</Text>
-                </Box>
-              )}
-              {last && (
-                <Box key={`last-${key}`} flexDirection="row" columnGap={1}>
-                  <Text dimColor>{LAST_LABEL}</Text>
-                  <Text dimColor color={lastIsShort(last) ? 'error' : 'claude'}>{lastWindowText(last)}</Text>
-                </Box>
-              )}
-              {notes.map((note, i) => <Text key={`note-${key}-${i}`} color="inactive">{note}</Text>)}
-              {controls}
-              {info.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
-            </Box>
-          )}
-        </Box>
-      )
-    }
-
-    const toneColor = (tone: 'good' | 'bad' | 'dim') => (tone === 'good' ? 'claude' : tone === 'bad' ? 'error' : undefined)
-    // the weekly card: the week's frame, then today's
-    const weekTop = (p: WeekPlan): JSX.Element[] => {
-      const past = pastDays(p, totals), hd = weekHead(p), L = weekBarLabels(p), d = todayText(p)
-      return [
-        <Box key="week-title" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-          <Text bold>This week</Text>
-          <Text dimColor>{`Resets ${dayTime(p.resetsAt)} · in ${dur((p.resetsAt - p.now) / HOUR)}`}</Text>
-        </Box>,
-        <Text key="week-frame" dimColor>This week · 100% = your weekly limit</Text>,
-        <Text key="week-head" bold dimColor={hd.tone === 'dim'} color={toneColor(hd.tone)}>{hd.head}</Text>,
-        <Text key="week-sub" dimColor>{hd.sub}</Text>,
-        ...(p.noData ? [] : [
-          <Box key="week-bar" flexDirection="row" flexWrap="wrap" columnGap={1}>
-            <Text dimColor>{L.used}</Text>
-            {L.add && <Text color={L.addBad ? 'error' : undefined} dimColor={!L.addBad}>{`· ${L.add}`}</Text>}
-            <Text dimColor>{`· ${L.end}`}</Text>
-          </Box>,
-          <Text key="week-days" dimColor>{daysText(p, past)}</Text>,
-        ]),
-        ...(showsToday(p) ? [
-          <Box key="week-today" flexDirection="column" marginTop={1}>
-            <Text dimColor>Today · 100% = today’s budget</Text>
-            <Text bold color={d.bad ? 'error' : undefined}>{d.predicted}</Text>
-            <Text dimColor>{[d.used, d.pred, d.end].filter(Boolean).join(' · ')}</Text>
-            <Text dimColor>{d.note}</Text>
-          </Box>,
-        ] : []),
-      ]
-    }
-    // the 5-hour card: clock times
-    const fiveTop = (m: Model): JSX.Element[] => {
-      const hd = fiveHead(m, now)
-      return [
-        <Box key="five-title" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-          <Text bold>5-hour window</Text>
-          <Text dimColor>{`Opened ${hm(m.resetsAt - 5 * HOUR)} · resets ${hm(m.resetsAt)}`}</Text>
-        </Box>,
-        <Text key="five-frame" dimColor>100% = your 5-hour limit</Text>,
-        <Text key="five-head" bold dimColor={hd.tone === 'dim'} color={toneColor(hd.tone)}>{hd.head}</Text>,
-        <Text key="five-sub" dimColor>{hd.sub}</Text>,
-      ]
-    }
     // the models card: the name and the summary on one line, the rest behind Details
     const modelsCard = (
       <Box key="block-models" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
@@ -1008,21 +998,10 @@ export const register: Register = (on, options) => {
         {modelsOpen && compareRow}
       </Box>
     )
-    const windowControls = (
-      <Box key="controls" flexDirection="column" alignItems="flex-start">
-        {modeButtons}
-        {windowRow}
-      </Box>
-    )
-
     return (
       <Box key="cards" flexDirection="column">
-        {plan && week
-          ? block(week, 'week', weekTop(plan), 'This week', windowControls, [averageNote(week)])
-          : <Text dimColor>No weekly limit reported.</Text>}
-        {five
-          ? block(five, 'five', fiveTop(five), '5-hour window', null, [averageNote(five)])
-          : <Text dimColor>No active 5-hour window.</Text>}
+        {plan ? weekCardTerm(plan) : <Text dimColor>No weekly limit reported.</Text>}
+        {five ? fiveCardTerm(five) : <Text dimColor>No active 5-hour window.</Text>}
         {modelsCard}
         {syncRow(sync)}
       </Box>

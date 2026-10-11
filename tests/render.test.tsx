@@ -201,15 +201,15 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
   expect((await desk.find({ type: 'Button', key: 'details-btn-five' }))?.props.label).toBe('Hide details ▴')
   await desk.unmount()
 
-  // the terminal: 1.4's figures as text, each frame named
+  // the terminal: each card's bars, each bar saying what its 100% is
   const term = await $.ui.mount({ plugin: 'token-range-monitor', surface: 'terminal', ...PANE })
-  expect(await term.find({ type: 'Text', text: 'This week · 100% = your weekly limit' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: '100% = weekly limit' })).toBeDefined()
   expect(await term.find({ type: 'Text', text: /^Predicted use today: [\d.]+% of daily budget$/ })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: '100% = your 5-hour limit' })).toBeDefined()
-  // 1.3's card, Last window a dim line under its figures, still open from the desktop's Details
-  expect((await term.findAll({ type: 'Text', text: /^Last window$/ })).length).toBe(2)
-  expect(await term.find({ type: 'Text', text: '28% to spare' })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: '17% short' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^100% = today’s budget, [\d.]+% of the week$/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: '100% = 5-hour limit' })).toBeDefined()
+  expect(await term.find({ key: 'week-bar' })).toBeDefined()
+  expect(await term.find({ key: 'week-days' })).toBeDefined()
+  expect(await term.find({ key: 'five-bar' })).toBeDefined()
   // compact: the cards keep their border but drop the desktop's padding rows and gaps
   for (const k of ['week', 'five', 'models']) {
     const card = await term.find({ key: `block-${k}` })
@@ -217,15 +217,9 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
     expect(card?.props.gap).toBe(0)
     expect(card?.props.marginBottom).toBe(0)
   }
-  // each card draws its window as a track at your pace, the reset ┤ at its end; this heavy week runs out early
-  expect((await term.findAll({ type: 'Text', text: '┤' })).length).toBe(2)
-  expect(await term.find({ type: 'Text', text: '╳' })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: /^\S.* early$/ })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: /^\d+\.\d%\/day$/ })).toBeDefined()
-  // the figures the track leaves out are behind the card's Details too
-  expect(await term.find({ type: 'Text', text: /^At week reset / })).toBeDefined()
-  await term.press({ key: 'details-btn-week' })
-  expect(await term.find({ type: 'Text', text: /^At week reset / })).toBeUndefined()
+  // the week and 5-hour cards have no Details in the terminal
+  expect(await term.find({ type: 'Button', key: 'details-btn-week' })).toBeUndefined()
+  expect(await term.find({ type: 'Button', key: 'details-btn-five' })).toBeUndefined()
   // the models card is one line until its Details opens
   expect(await term.find({ type: 'Text', text: /^This week \d+% used/ })).toBeUndefined()
   await term.press({ key: 'details-btn-models' })

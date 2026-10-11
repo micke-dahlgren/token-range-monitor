@@ -528,7 +528,7 @@ export function paceText(m: Model): string | null {
 
 /** The card's colours, as CSS variables a chart's <style> sets from the person's theme (see theme.ts). */
 export const C = Object.fromEntries(
-  (['card', 'veil', 'fg', 'dim', 'off', 'barTop', 'barBottom', 'limit', 'over', 'under', 'bad', 'fable', 'opus', 'sonnet', 'haiku',
+  (['card', 'veil', 'fg', 'dim', 'off', 'barTop', 'barBottom', 'limit', 'over', 'under', 'bad', 'good', 'fable', 'opus', 'sonnet', 'haiku',
     'surface', 'raised', 'inset', 'panel', 'line', 'muted', 'faint', 'accent', 'accentBg', 'badBg', 'solid'] as const).map(k => [k, v(k)]),
 ) as Record<PaletteKey, string>
 /** The system's own sans, as the pane's design sets it; figures in it line up (tabular numbers, see `drawing`). */
@@ -609,11 +609,11 @@ function headLayout(m: Model, width: number, last?: LastWindow | null) {
     })
   }
   // the left-at-reset figure is coloured by its state; the others take the figure role's colour
-  add(m.kind === 'week' ? 'At week reset' : 'At 5h reset', leftText(m), m.noData ? C.dim : m.over ? C.bad : C.under)
+  add(m.kind === 'week' ? 'At week reset' : 'At 5h reset', leftText(m), m.noData ? C.dim : m.over ? C.bad : C.good)
   add('Your pace', m.noData ? 'No data' : rateText(m, m.rate), m.noData ? C.dim : undefined)
   add('Safe pace', rateText(m, m.limit), undefined)
   // the last window: smaller and lighter, in left-at-reset's colours but muted, its caption ending in an info circle
-  if (last) add(LAST_LABEL, lastWindowText(last), lastIsShort(last) ? C.bad : C.under, { info: true, role: 'aside', opacity: 0.7 })
+  if (last) add(LAST_LABEL, lastWindowText(last), lastIsShort(last) ? C.bad : C.good, { info: true, role: 'aside', opacity: 0.7 })
   // the figures flow left to right, onto another row where the card is too narrow for the next
   const gap = px('figure') * 1.5
   let x = 0, row = 0

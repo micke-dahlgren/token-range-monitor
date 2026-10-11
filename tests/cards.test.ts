@@ -36,11 +36,12 @@ test('the 5-hour part reads in clock times: a cut-off, lasting to the reset, a r
   expect(fivePart(late, at(10, 22), false)).toMatchObject({ value: 'cut off ~00:09', rest: ', resets 00:40' })
   expect(hm(late.resetsAt)).toBe('00:40')
 
-  // the drawing names its frame, the cut-off's time in red, and marks the cut-off on the line
+  // the drawing names its frame and the cut-off's time, and its bar is the window's use: used, then this pace's addition
   const svg = fiveCardSvg(cut, now, 600)
   expect(svg).toContain('100% = your 5-hour limit')
   expect(svg).toContain('<tspan style="fill:var(--bad)" font-weight="600">~17:36 </tspan>')
-  expect(svg).toContain('>cut off ~17:36<')
+  expect(svg).toContain('>, cut off ~17:36<')
+  expect(svg).toContain('>at this pace<')
   expect(svg).not.toMatch(/NaN|Infinity|undefined/)
   // the figures under the head: what's used and the pace in bold, the time after the cut-off in red
   expect(fiveRuns(cut, now).map(r => r.s).join('')).toBe(fiveHead(cut, now).sub)

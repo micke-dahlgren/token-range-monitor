@@ -3,7 +3,7 @@ import { C, DAY, HOUR, LAST_LABEL, drawing, dur, isShort, lastIsShort, lastWindo
 import type { BandPart, LastWindow, Model } from './range'
 import type { WeekPlan } from './pace'
 import { DEFAULT_PALETTES } from './theme'
-import { NARROW, SIZE, cardHeader, icon, metricGrid, rect, rich, sideRounded, stripes, t, tile, topRounded, track, trackLabels, tw } from './ui'
+import { NARROW, SIZE, cardHeader, icon, metricGrid, rect, rich, stripes, t, tile, topRounded, track, trackLabels, tw } from './ui'
 import type { Run } from './ui'
 
 /**
@@ -197,7 +197,7 @@ export function fiveRuns(m: Model, now: number): Run[] {
   const used: Run[] = [strong(`${Math.round(m.pct)}% used`), { s: ` since ${hm(opened)}, ` }, strong(`${one(m.rate)}% an hour.`)]
   const cut = cutOff(m, now)
   if (cut !== null) return [...used, { s: ` It resets at ${hm(m.resetsAt)}, ` }, { s: `${dur((m.resetsAt - cut) / HOUR)} after the cut-off.`, fill: C.bad }]
-  return [...used, { s: ' About ' }, { s: `${Math.round(m.arrive)}% to spare`, fill: C.accent, weight: 600 }, { s: ' at the reset.' }]
+  return [...used, { s: ' About ' }, { s: `${Math.round(m.arrive)}% to spare`, fill: C.good, weight: 600 }, { s: ' at the reset.' }]
 }
 
 // ---- drawing ----
@@ -416,13 +416,13 @@ export function fiveHead(m: Model, now: number): { head: string; tone: 'good' | 
 export function fiveSummary(m: Model): Run[] {
   if (m.noData) return [{ s: m.noData }]
   if (isShort(m)) return [{ s: 'Runs out in ' }, { s: dur(m.runsOutIn), fill: C.bad }, { s: ` · ${dur(m.early)} early` }]
-  return [{ s: 'At the reset ' }, { s: spare(m.arrive), fill: C.accent }, { s: ` · resets in ${dur(m.left)}` }]
+  return [{ s: 'At the reset ' }, { s: spare(m.arrive), fill: C.good }, { s: ` · resets in ${dur(m.left)}` }]
 }
 
 /**
  * The 5-hour card, `width` wide: its header; "100% = your 5-hour limit"; the cut-off (its time in red) or
- * the reset it lasts to, with the figures under it; and a line from the window's opening to its reset, solid
- * up to now, striped for the projection, the time past the cut-off tinted red behind a red mark.
+ * the reset it lasts to, with the figures under it; and the window's use as one bar on that scale: solid for
+ * what's used, striped for what this pace adds by the reset.
  */
 export function fiveCardSvg(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const W = width, opened = m.resetsAt - 5 * HOUR
@@ -447,40 +447,28 @@ export function fiveCardSvg(m: Model, now: number, width: number, pal: Palettes 
   y = sub.y + SIZE.body * 0.6
   if (m.noData) return drawing(s, Math.ceil(y + 8), pal)
 
-  // ---- the window, from its opening to its reset ----
-  y += 27 + 18 + 7
-  const span = m.resetsAt - opened, X = (tm: number) => Math.max(0, Math.min(1, (tm - opened) / span)) * W
-  const nowX = X(now), cutX = cut !== null ? X(cut) : null
-  s += rect(0, y, W, 15, `fill:${C.raised}`, ' rx="4"')
-  s += `<path d="${sideRounded(nowX, y, W - nowX, 15, 4, 'right')}" style="fill:url(#fv)"/>`
-  if (nowX > 0) s += `<path d="${sideRounded(0, y, nowX, 15, 4, 'left')}" style="fill:${C.accent}"/>`
-  if (cutX !== null) {
-    s += `<path d="${sideRounded(cutX, y, W - cutX, 15, 4, 'right')}" style="fill:${C.badBg}" fill-opacity="0.8"/>`
-    s += rect(cutX - 1, y - 7, 2, 29, `fill:${C.bad}`)
-    const cl = `cut off ~${hm(cut!)}`
-    s += t(Math.max(tw(cl, SIZE.meta), cutX + 1), y - 12, cl, { size: SIZE.meta, fill: C.bad, anchor: 'end' })
-  }
-  s += rect(nowX - 1, y - 4, 2, 23, `fill:${C.fg}`)
-  // the times under it: the opening, now (under its mark, kept clear of the ends), the reset
-  const ly = y + 15 + 12 + SIZE.body * 1.05
-  const openL = hm(opened), resetL = `reset ${hm(m.resetsAt)}`, nowL = `now ${hm(now)}`
-  const nw = tw(nowL, SIZE.body)
-  const nx = Math.max(tw(openL, SIZE.body) + 12, Math.min(W - tw(resetL, SIZE.body) - 12 - nw, nowX - nw / 2))
-  s += t(0, ly, openL, { size: SIZE.body, fill: C.muted })
-  s += t(W, ly, resetL, { size: SIZE.body, fill: C.muted, anchor: 'end' })
-  if (W >= NARROW) s += t(nx, ly, nowL, { size: SIZE.body })
-  else s += t(0, ly + SIZE.body * 1.6, nowL, { size: SIZE.body })
-  y = ly + (W >= NARROW ? 0 : SIZE.body * 1.6) + SIZE.body * 0.5
+  // ---- the window's use as one bar, on the card's scale: used, then what this pace adds by the reset ----
+  y += 27
+  const proj = 100 - m.arrive, used = Math.min(100, m.pct), add = Math.max(0, proj - m.pct), over = proj > 100
+  s += track(0, y, W - 2, 19, used / 100, Math.min(100, proj) / 100, 1, { stripe: 'fv' })
+  y += 19 + 8
+  const row = trackLabels([
+    [strong(`${one(m.pct)}%`, C.fg, 500), { s: ' used' }],
+    add > 0 ? [strong(`+${one(add)}%`, over ? C.bad : C.fg, 500), { s: ' at this pace' }, ...(over ? [{ s: `, cut off ~${hm(cut ?? m.resetsAt)}`, fill: C.bad }] : [])] : null,
+    [{ s: `100% · resets ${hm(m.resetsAt)}` }],
+  ], y + SIZE.meta * 1.15, W)
+  s += row.svg
+  y = row.y + SIZE.meta * 0.6
   return drawing(s, Math.ceil(y + 4), pal)
 }
 
 /** A 1.3 head's figures, as the Details' grid shows them: what's left at the reset, the two paces, the last window. */
 export function oldFigures(m: Model, last: LastWindow | null, width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const items = [
-    { label: m.kind === 'week' ? 'At week reset' : 'At 5h reset', value: leftText(m), fill: m.noData ? C.muted : isShort(m) ? C.bad : C.accent },
+    { label: m.kind === 'week' ? 'At week reset' : 'At 5h reset', value: leftText(m), fill: m.noData ? C.muted : isShort(m) ? C.bad : C.good },
     { label: 'Your pace', value: m.noData ? 'No data' : rateText(m, m.rate) },
     { label: 'Safe pace', value: rateText(m, m.limit) },
-    ...(last ? [{ label: LAST_LABEL, value: lastWindowText(last), fill: lastIsShort(last) ? C.bad : C.accent }] : []),
+    ...(last ? [{ label: LAST_LABEL, value: lastWindowText(last), fill: lastIsShort(last) ? C.bad : C.good }] : []),
   ]
   const g = metricGrid(items, width)
   return drawing(g.svg, Math.ceil(g.y), pal)
