@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Token Range Monitor — a Claude Code plugin for understanding usage and predicting when it runs out. Interactive visual design preview with sample data.">
+<title>Token Range Monitor · Claude Code plugin</title>
+<!--
+  Visual redesign of the 1.4.0 interface preview. All figures are sample data
+  from the original example, not live account readings. Existing data-part
+  names are retained to map the design back to the plugin implementation.
+  Native HTML/CSS replaces text baked into SVG wherever wrapping is needed.
+  Historical SVG drawings retain their original data and inherit the theme.
+-->
+<style>
+:root {
+  --text-title:28px; --text-body:16px; --text-meta:13px; --text-fine:11px;
+  color-scheme:dark;
+  --bg:#141414; --surface:#202020; --raised:#30302e; --inset:#1a1a1a; --panel:#292826;
+  --fg:#f2efeb; --muted:#aaa7a3; --faint:#8e8a85; --line:#353432;
+  --accent:#df9a7c; --accent-bg:#362820; --good:#df9a7c; --good-bg:#362820;
+  --bad:#e7a19b; --bad-bg:#372424; --solid:#a9a5a0; --pattern:var(--accent);
+  --opus:#df9a7c; --sonnet:#b9ada1; --haiku:#999590;
+  --sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+:root[data-theme="light"] {
+  color-scheme:light;
+  --bg:#efede9; --surface:#fffefa; --raised:#e6e2dc; --inset:#f5f2ed; --panel:#f0ece6;
+  --fg:#302e2b; --muted:#716b64; --faint:#807970; --line:#ded9d2;
+  --accent:#a85f42; --accent-bg:#f3e4d9; --good:#a85f42; --good-bg:#f3e4d9;
+  --bad:#ae504b; --bad-bg:#f3e3e0; --solid:#aaa197; --pattern:var(--accent);
+  --opus:#a85f42; --sonnet:#827365; --haiku:#8d8780;
+}
+* {box-sizing:border-box}
+html {scroll-behavior:smooth;scroll-padding-top:24px}
+body {margin:0;background:var(--bg);color:var(--fg);font:var(--text-body)/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+button,input,select {font:inherit}
+button,summary,select {cursor:pointer}
+button {color:inherit;transition:background .15s,color .15s,border-color .15s}
+button:hover {background:var(--raised)}
+button:disabled {cursor:default;opacity:.55}
+button:focus-visible,summary:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible {outline:2px solid var(--accent);outline-offset:4px}
+::selection {background:var(--accent-bg);color:var(--accent)}
+svg {display:block;flex-shrink:0}
+p,h1,h2,h3 {margin:0}
+h2 {font-size:var(--text-body);line-height:1.3;font-weight:650;letter-spacing:-.6px}
+h3 {font-size:var(--text-body);font-weight:600}
+a {color:var(--accent);text-underline-offset:3px}
+.mono {font-family:var(--sans);font-variant-numeric:tabular-nums}
+.muted {color:var(--muted)}
+.good {color:var(--good)}
+.bad {color:var(--bad)}
+.icon {width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.page {max-width:1140px;margin:0 auto;padding:32px 24px 26px}
+.masthead {display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:24px}
+.identity {display:flex;gap:15px;align-items:center}
+.product-mark {display:grid;place-items:center;width:48px;height:48px;background:var(--raised);border:0;border-radius:12px;color:var(--accent);flex-shrink:0}
+.product-mark svg {width:30px;height:30px}
+h1 {font:650 var(--text-title)/1.25 var(--sans);letter-spacing:-.9px}
+.subtitle {color:var(--muted);font-size:var(--text-meta);margin-top:3px}
+.header-tools {display:flex;align-items:center;gap:12px}
+.period-label {display:flex;align-items:center;gap:9px;padding:9px 13px;border:0;border-radius:8px;background:var(--surface);font-size:var(--text-meta);white-space:nowrap}
+.period-label .icon {width:16px;height:16px;color:var(--muted)}
+.theme-switch {display:flex;border:0;background:var(--surface);border-radius:7px;padding:3px;gap:3px;flex-shrink:0}
+.theme-switch button {border:0;background:transparent;border-radius:4px;width:29px;height:29px;display:grid;place-items:center;color:var(--muted)}
+.theme-switch button[aria-pressed="true"] {color:var(--fg);background:var(--raised)}
+.theme-switch button:hover {color:var(--accent)}
+.theme-switch .icon {width:16px;height:16px}
+.pane-toolbar {display:flex;justify-content:space-between;align-items:center;gap:12px;margin:-8px 1px 14px;color:var(--muted);font-size:var(--text-meta)}
+.pane-toolbar .dot {display:inline-block;margin-right:6px;vertical-align:2px;background:var(--faint)}
+.pane {display:grid;gap:24px}
+.card {background:var(--surface);border:0;border-radius:14px;overflow:hidden}
+.card-inner {padding:24px}
+.card-header {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+.card-title {display:flex;align-items:center;gap:15px}
+.card-title h2 {font-size:var(--text-title);line-height:1.25}
+.card-title > .icon {width:48px;height:48px;padding:12px;border:0;border-radius:10px;background:var(--raised);color:var(--fg)}
+.card-subtitle {font-size:var(--text-meta);color:var(--muted);margin-top:3px}
+.card-meta {font:var(--text-meta)/1.7 var(--sans);font-variant-numeric:tabular-nums;color:var(--muted);text-align:right}
+.badge {display:inline-flex;align-items:center;gap:6px;border-radius:4px;padding:3px 7px;font:var(--text-meta)/1.5 var(--sans);background:var(--raised);color:var(--muted);white-space:nowrap}
+.dot {width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
+.frame-label {font-size:var(--text-meta);color:var(--muted);line-height:1.5}
+.weekly-overview {margin:22px 0 28px}
+
+.forecast-topline {display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:7px}
+.forecast-headline {font:600 var(--text-title)/1.3 var(--sans);letter-spacing:-.6px;color:var(--accent)}
+.forecast-range {font:500 var(--text-meta)/1.6 var(--sans);font-variant-numeric:tabular-nums;border:0;background:var(--raised);padding:3px 7px;border-radius:5px;color:var(--muted);white-space:nowrap}
+.forecast-copy {font-size:var(--text-meta);line-height:1.75;color:var(--muted)}
+.forecast-copy strong {color:var(--fg);font-weight:500}
+.forecast-copy .mono {font-family:var(--sans)}
+.uncertainty-copy {font-size:var(--text-meta);color:var(--muted);margin-top:5px;line-height:1.7}
+.usage-block {margin-top:17px}
+.usage-track {position:relative;display:flex;height:19px;background:var(--raised);border-radius:5px;overflow:visible}
+.used-fill {background:var(--accent);border-radius:5px 0 0 5px;flex-shrink:0}
+.predicted-fill {background:repeating-linear-gradient(125deg,transparent 0,transparent 4px,var(--pattern) 4px,var(--pattern) 6px);background-color:var(--raised);flex-shrink:0}
+.limit-mark {position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--fg);right:0;border-radius:1px}
+.track-labels {display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-top:8px;font:var(--text-meta)/1.65 var(--sans);font-variant-numeric:tabular-nums;color:var(--muted)}
+.track-labels strong {font-weight:500;color:var(--fg)}
+.track-labels span:last-child {text-align:right}
+.daily-chart {position:relative;margin:22px 0 0;padding-left:36px;padding-right:4px}
+.chart-axis {position:absolute;top:30px;height:136px;left:0;display:flex;flex-direction:column;justify-content:space-between;font-size:var(--text-meta);color:var(--muted);text-align:right;width:27px}
+.chart-columns {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:18px;position:relative}
+.chart-columns:before,.chart-columns:after {content:'';position:absolute;left:0;right:0;border-top:1px dashed var(--line);top:30px;pointer-events:none}
+.chart-columns:after {top:98px}
+.day {min-width:0;position:relative;text-align:center;font:var(--text-meta)/1.5 var(--sans);font-variant-numeric:tabular-nums;color:var(--muted)}
+.day-value {display:block;margin-bottom:10px;white-space:nowrap;font-size:var(--text-meta);height:20px}
+.day-shape {height:136px;display:flex;align-items:flex-end;position:relative;border-bottom:1px solid var(--line)}
+.day-bar {position:relative;width:100%;height:var(--bar);background:var(--accent);border:1px solid var(--accent);border-radius:4px 4px 0 0}
+.day.future .day-bar {background:repeating-linear-gradient(125deg,transparent 0,transparent 4px,var(--pattern) 4px,var(--pattern) 6px);background-color:var(--inset);border:1px solid var(--pattern)}
+.budget-outline {position:absolute;left:-3px;right:-3px;bottom:0;height:85%;border:1px solid var(--muted);border-bottom:0;border-radius:4px 4px 0 0}
+.day.today .day-bar {background:var(--accent);border-color:var(--accent)}
+.day.today .prediction {position:absolute;bottom:var(--bar);left:0;right:0;height:70.55%;background:repeating-linear-gradient(125deg,transparent 0,transparent 4px,var(--pattern) 4px,var(--pattern) 6px);background-color:var(--inset);border-radius:3px 3px 0 0}
+.day-name {display:block;margin-top:9px;font-size:var(--text-meta);color:var(--fg)}
+.day-name small {display:block;font-size:var(--text-meta);color:var(--muted);margin-top:2px}
+.day.today .day-value,.day.today .day-name {color:var(--accent)}
+.day.today .now-dot {display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--accent);vertical-align:middle;margin:0 0 2px 3px}
+.chart-caption {font-size:var(--text-meta);color:var(--muted);margin:13px 0 5px}
+.chart-footer {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:11px}
+.legend {display:flex;flex-wrap:wrap;gap:8px 20px;font-size:var(--text-meta);line-height:1.65;color:var(--muted)}
+.legend-item {display:flex;align-items:center;gap:7px}
+.swatch {width:13px;height:12px;border-radius:3px;background:var(--accent);display:inline-block;flex-shrink:0}
+.swatch.striped {background:repeating-linear-gradient(125deg,transparent 0,transparent 2px,var(--pattern) 2px,var(--pattern) 4px);border:1px solid var(--pattern)}
+.swatch.outlined {background:transparent;border:1px solid var(--muted);border-bottom:0;border-radius:2px 2px 0 0}
+.budget-toggle {display:flex;align-items:center;gap:7px;font-size:var(--text-meta);color:var(--muted);cursor:pointer;white-space:nowrap}
+.budget-toggle input {accent-color:var(--accent);margin:0;width:14px;height:14px}
+.daily-chart[data-show-budget="false"] .budget-outline {display:none}
+.today-section {margin-top:26px;padding:20px;border:0;border-radius:10px;background:var(--panel)}
+.today-layout {display:grid;grid-template-columns:235px minmax(0,1fr);gap:22px;align-items:center}
+.today-metric {display:flex;align-items:flex-start;gap:13px}
+.today-metric > .icon {width:43px;height:43px;padding:10px;background:var(--raised);border:0;border-radius:9px;color:var(--accent)}
+.today-title h3 {font-size:var(--text-body);font-weight:500}
+.today-title .value {display:block;font:650 var(--text-title)/1.35 var(--sans);letter-spacing:-1px;color:var(--accent);font-variant-numeric:tabular-nums}
+.today-title .value small {display:block;font:var(--text-meta)/1.4 var(--sans);letter-spacing:0;color:var(--muted)}
+.today-section .usage-block {margin-top:8px}
+.today-section .usage-track {height:23px}
+.today-section .predicted-fill {background-color:color-mix(in srgb,var(--accent),var(--raised) 80%);background-image:repeating-linear-gradient(125deg,transparent 0,transparent 4px,var(--accent) 4px,var(--accent) 6px)}
+.today-section .forecast-copy {font-size:var(--text-meta);margin-top:16px;max-width:none}
+details > summary {list-style:none}
+details > summary::-webkit-details-marker {display:none}
+.disclosure {border:0;background:var(--inset)}
+.disclosure > summary {display:flex;justify-content:space-between;align-items:center;gap:14px;padding:13px 24px;font-size:var(--text-meta);color:var(--muted)}
+.disclosure > summary:hover {color:var(--fg);background:var(--raised)}
+.summary-action {display:flex;align-items:center;gap:7px;white-space:nowrap;color:var(--fg)}
+.caret {width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.5;transition:transform .15s}
+details[open] > summary .caret {transform:rotate(180deg)}
+.show-label {display:inline}.hide-label {display:none}
+details[open] > summary .show-label {display:none}details[open] > summary .hide-label {display:inline}
+.detail-body {padding:4px 24px 22px}
+.metric-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:13px 0 21px}
+.metric-grid dt {font-size:var(--text-meta);color:var(--muted);margin-bottom:5px}
+.metric-grid dd {margin:0;font-size:var(--text-meta);font-weight:500;font-variant-numeric:tabular-nums}
+.history-chart svg {width:100%;height:auto;overflow:visible;--card:var(--inset);--veil:var(--inset);--fg:var(--solid);--dim:var(--muted);--off:var(--faint);--limit:var(--sonnet);--over:var(--accent);--under:var(--good);--fable:var(--sonnet)}
+.history-controls {display:flex;align-items:center;justify-content:space-between;gap:15px;margin:12px 0}
+.history-controls p {font-size:var(--text-meta);color:var(--muted)}
+.segmented {display:inline-flex;gap:2px;border:0;background:var(--surface);border-radius:6px;padding:3px;flex-shrink:0}
+.segmented button {border:0;background:transparent;border-radius:3px;padding:5px 10px;font-size:var(--text-meta);color:var(--muted)}
+.segmented button[aria-pressed="true"] {background:var(--raised);color:var(--fg)}
+.detail-copy {font-size:var(--text-meta);line-height:1.8;color:var(--muted)}
+.detail-copy + .detail-copy {margin-top:7px}
+.split-track {height:5px;display:flex;gap:3px;margin:2px 0 20px}
+.split-track span {background:var(--accent);border-radius:2px}.split-track span:last-child {background:var(--raised);border:1px dashed var(--faint)}
+.table-head,.project-row,.other-details > summary {display:grid;grid-template-columns:minmax(180px,1fr) minmax(160px,1.25fr) 66px;align-items:center;gap:20px}
+.table-head {padding:10px 15px;border:0;border-radius:7px;background:var(--panel);font-size:var(--text-meta);color:var(--muted);margin-bottom:4px}
+.table-head span:last-child {text-align:right}
+.project-row {min-height:52px;padding:0 15px;font-size:var(--text-meta);border:0}
+.project-name {display:flex;align-items:center;gap:9px;min-width:0;overflow-wrap:anywhere}
+.project-name .icon {width:14px;height:14px;color:var(--muted)}
+.project-bar {height:9px;background:var(--raised);border-radius:4px;overflow:hidden}
+.project-bar span {display:block;height:100%;width:var(--width);background:var(--accent);border-radius:4px}
+.project-percent {text-align:right;font-size:var(--text-meta);font-variant-numeric:tabular-nums}
+.other-details {border:0}
+.other-details > summary {min-height:52px;padding:0 15px;font-size:var(--text-meta);border-radius:7px}
+.other-details > summary:hover {background:var(--panel)}
+.other-details > summary:hover .project-name {color:var(--accent)}
+.other-body {border:0;margin:4px 15px 18px 21px;padding:1px 0 1px 16px;display:grid;gap:16px}
+.other-row {display:flex;justify-content:space-between;gap:15px;font-size:var(--text-meta)}
+.other-note {font-size:var(--text-meta);color:var(--muted);line-height:1.7;margin-top:2px;max-width:750px}
+.unused-row {color:var(--muted);margin-top:8px}
+.unused-row .project-bar span {background:repeating-linear-gradient(125deg,transparent 0,transparent 3px,var(--pattern) 3px,var(--pattern) 5px);border:1px solid var(--pattern)}
+.total-row {display:grid;grid-template-columns:minmax(180px,1fr) minmax(160px,1.25fr) 66px;align-items:center;gap:20px;padding:12px 15px;font-size:var(--text-meta);font-weight:500;background:var(--panel);border-radius:7px;margin-top:6px}
+.total-row .project-bar span {background:var(--accent)}
+.total-row .mono {text-align:right;font:var(--text-meta) var(--sans)}
+.privacy {display:flex;align-items:center;gap:7px;padding:13px 24px;border:0;font-size:var(--text-meta);color:var(--muted);background:var(--inset)}
+.privacy .icon {width:13px;height:13px}
+.window-overview {margin:22px 0 5px}
+
+.cutoff-title {font:600 var(--text-title)/1.35 var(--sans);letter-spacing:-.6px;margin:5px 0 7px}
+.cutoff-title .time {white-space:nowrap}
+.time-chart {position:relative;margin:27px 0 2px;padding-top:18px}
+.time-track {height:15px;border-radius:4px;background:var(--raised);display:flex;position:relative}
+.time-track .used-fill {width:56.6667%;background:var(--accent)}
+.time-track .predicted-fill {width:43.3333%;border-radius:0 4px 4px 0}
+.cutoff-marker {position:absolute;left:88.6667%;height:29px;width:2px;top:-7px;background:var(--bad)}
+.cutoff-marker span {position:absolute;right:0;top:-21px;white-space:nowrap;color:var(--bad);font:var(--text-meta) var(--sans)}
+.cutoff-zone {position:absolute;left:88.6667%;right:0;top:0;bottom:0;background:var(--bad-bg);opacity:.8;border-radius:0 4px 4px 0}
+.now-marker {position:absolute;left:56.6667%;height:23px;width:2px;top:-4px;background:var(--fg)}
+.time-labels {position:relative;display:flex;justify-content:space-between;padding-top:12px;font:var(--text-body)/1.6 var(--sans);font-variant-numeric:tabular-nums;color:var(--muted)}
+.time-labels .now {position:absolute;left:56.6667%;transform:translateX(-50%);color:var(--fg)}
+.time-labels span:last-child {text-align:right}
+.model-summary {font-size:var(--text-meta);color:var(--muted)}
+.model-summary .model-color {display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:2px}
+.model-summary .sep {color:var(--faint);margin:0 12px}
+.model-costs {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:12px 0 20px}
+.model-cost {padding:6px 20px;border:0}
+.model-cost:first-child {padding-left:0}.model-cost:last-child {border:0;padding-right:0}
+.model-cost h3 {font-size:var(--text-body);font-weight:500}
+.model-cost .cost-value {display:block;font:600 var(--text-title)/1.3 var(--sans);letter-spacing:-1px;margin:7px 0;font-variant-numeric:tabular-nums}
+.model-cost .cost-value.learning {font-size:var(--text-title);line-height:1.8;color:var(--muted);letter-spacing:-.5px}
+.model-cost p {font-size:var(--text-meta);color:var(--muted)}
+.model-cost .baseline {display:inline-block;margin-left:5px;font-size:var(--text-meta);color:var(--muted);border:0;background:var(--raised);padding:1px 5px;border-radius:3px;vertical-align:1px}
+.compare-control {display:flex;justify-content:flex-end;align-items:center;gap:9px;font-size:var(--text-meta);color:var(--muted);padding-bottom:20px;border:0}
+.model-usage-heading {margin:20px 0 13px;font-size:var(--text-meta)}
+.model-usage-heading small {display:block;font-size:var(--text-meta);color:var(--muted);margin-top:2px}
+.model-row {padding:14px 0;border:0}
+.model-row-head {display:flex;justify-content:space-between;font-size:var(--text-meta)}
+.model-row-head .mono {font-size:var(--text-meta)}
+.model-label {display:flex;align-items:center;gap:7px}.model-dot {width:8px;height:8px;border-radius:2px;background:var(--model,var(--faint))}
+.effort-track {display:flex;gap:3px;height:6px;background:var(--raised);border-radius:3px;margin:9px 0 8px;overflow:hidden}
+.effort-track span {height:100%;background:var(--accent);width:var(--width);border-radius:3px}.effort-track span + span {opacity:.5}
+.effort-tags {display:flex;gap:7px;font:var(--text-meta) var(--sans);color:var(--muted)}
+.effort-tags > span {background:var(--raised);border:0;border-radius:3px;padding:3px 6px}
+.model-row.quiet {padding:9px 0;color:var(--muted)}.models-explanation {margin-top:24px;padding-top:0;border:0}
+.sync-line {display:flex;align-items:center;justify-content:space-between;gap:15px;padding:4px 2px;font-size:var(--text-meta);color:var(--muted)}
+.sync-copy {display:flex;align-items:center;gap:7px;flex-wrap:wrap}.sync-copy .dot {color:var(--accent)}
+.text-button {display:inline-flex;align-items:center;gap:6px;background:transparent;border:0;border-radius:4px;padding:4px;font-size:var(--text-meta);color:var(--muted)}
+.text-button .icon {width:14px;height:14px}
+.specimen {margin-top:18px;border:0;background:var(--surface);border-radius:10px}
+.specimen > summary {display:flex;align-items:center;justify-content:space-between;padding:16px 20px;font-size:var(--text-meta);color:var(--muted);border-radius:10px}
+.specimen > summary:hover {color:var(--fg);background:var(--panel)}
+.specimen-body {padding:0 20px 20px}.narrow-preview {max-width:400px}
+.terminal-preview {border:0;border-radius:9px;overflow:hidden;background:var(--inset)}
+.terminal-title {display:flex;align-items:center;gap:7px;padding:10px 15px;border:0;background:var(--panel);font:var(--text-meta) var(--sans);color:var(--muted)}
+.terminal-title .path {margin-left:auto;color:var(--faint)}
+.band {display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:14px 15px 9px;font:var(--text-meta)/1.8 var(--sans)}
+.band .part {white-space:nowrap}.band b {font-weight:500}.band .separator {color:var(--faint)}
+.tiny-btn {border:0;background:var(--raised);border-radius:4px;padding:1px 7px;font:var(--text-meta)/1.8 var(--sans);color:var(--muted)}
+.prompt {display:flex;gap:11px;margin:0 13px 13px;padding:11px 12px;border:0;background:var(--surface);border-radius:5px;font:var(--text-meta)/1.5 var(--sans);color:var(--faint)}
+.prompt .chevron {color:var(--accent);font-weight:600}.narrow-preview .band {font-size:var(--text-meta);gap:4px 8px}
+.terminal-text {margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:var(--text-meta)/1.9 var(--sans);color:var(--muted);background:var(--inset);border:0;border-radius:7px;padding:20px}
+.terminal-text .cmd {color:var(--accent)}.terminal-text strong {color:var(--fg);font-weight:500}
+.footer {display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap;margin-top:32px;padding-top:0;border:0;font-size:var(--text-meta);color:var(--faint)}
+.custom-range {padding:14px;background:var(--panel);border:0;border-radius:7px;margin:10px 0;font-size:var(--text-meta)}
+.custom-range label {display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.custom-range input {background:var(--inset);color:var(--fg);border:0;border-radius:4px;padding:6px;font:var(--text-meta) var(--sans)}
+.custom-range p {margin-top:8px;color:var(--muted);font-size:var(--text-meta)}
+[hidden] {display:none!important}
+dialog {background:var(--surface);color:var(--fg);border:0;border-radius:14px;width:min(420px,calc(100% - 32px));padding:24px;box-shadow:0 25px 80px #0006}
+dialog::backdrop {background:#0008}.dialog-head {display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.dialog-head button {border:0;background:transparent;color:var(--muted);font-size:var(--text-title)}
+.settings-row {display:flex;align-items:center;justify-content:space-between;gap:20px;padding:17px 0;border:0;font-size:var(--text-meta)}
+.settings-row input {accent-color:var(--accent);width:16px;height:16px}
+.settings-row select {background:var(--raised);color:var(--fg);border:0;padding:7px;border-radius:4px;font-size:var(--text-meta)}
+
+/* Typography contract: 28 / 16 / 13 px throughout the interface. The 11 px
+   fourth size is reserved for the two footer notes. Do not add ad-hoc sizes. */
+.forecast-copy,.today-title h3,.project-row,.project-percent,
+.other-details > summary,.other-row,.total-row,.total-row .mono,
+.model-summary,.model-cost h3,.model-usage-heading,.model-row-head,
+.model-row-head .mono,.settings-row {font-size:var(--text-body)}
+.model-cost .cost-value.learning {font-size:var(--text-body);line-height:1.5;letter-spacing:0}
+.footer {font-size:var(--text-fine)}
+.identity,.identity > div {min-width:0}
+.track-labels {display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+.track-labels span {min-width:0}
+.track-labels span:nth-child(2) {text-align:center}
+.day-name small {font-size:var(--text-meta)}
+.chart-axis span {position:absolute;right:0;transform:translateY(-50%)}
+.chart-axis span:nth-child(1) {top:0}
+.chart-axis span:nth-child(2) {top:50%}
+.chart-axis span:nth-child(3) {top:100%}
+.daily-chart-viewport,.history-chart {max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+.daily-chart-viewport:focus-visible {outline:2px solid var(--accent);outline-offset:4px}
+.history-plot {position:relative;min-width:560px;--dim:var(--muted);--limit:var(--sonnet)}
+.history-label {position:absolute;font:var(--text-meta)/1 var(--sans);font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none}
+.model-cost .baseline {font-size:var(--text-meta)}
+.model-summary .model-color,.model-dot {background:var(--accent)!important}
+.dialog-head button {display:grid;place-items:center}
+@media(max-width:850px) {
+  .page {padding:25px 20px}.period-label {display:none}
+  
+.chart-columns {gap:14px}
+  .today-layout {grid-template-columns:190px minmax(0,1fr);gap:18px}
+  .table-head,.project-row,.other-details > summary,.total-row {grid-template-columns:minmax(145px,1fr) minmax(90px,1fr) 55px;gap:15px}
+}
+@media(max-width:600px) {
+  .page {padding:22px 14px}.masthead {align-items:flex-start;gap:12px;margin-bottom:22px}.identity {gap:10px}
+  .product-mark {width:37px;height:37px;border-radius:9px}.product-mark svg {width:25px;height:25px}
+  h1 {letter-spacing:-.65px}.subtitle {max-width:230px}
+  .theme-switch {padding:2px;gap:1px}.theme-switch button {width:25px;height:27px}
+  .card-inner {padding:19px 17px}.card-header {gap:12px;align-items:flex-start;margin-bottom:18px}
+  .card-title {gap:11px}.card-title > .icon {width:39px;height:39px;padding:9px;border-radius:8px}
+.card-meta {text-align:left;width:100%;padding-left:50px;margin-top:-4px}
+  .weekly-overview {margin:18px 0 24px}
+  
+  .forecast-topline {gap:8px}.forecast-headline {letter-spacing:-.5px}
+
+  .usage-track {height:17px}.track-labels {gap:9px}
+  .daily-chart {padding-left:27px;margin-top:18px}.chart-axis {width:21px;top:25px;bottom:38px}
+  .chart-columns {gap:9px}.chart-columns:before {top:25px}.chart-columns:after {top:80px}
+  .day-value {height:16px;margin-bottom:9px}.day-shape {height:110px}
+  .chart-footer {gap:12px;align-items:flex-start}.legend {gap:6px 13px}
+  .today-section {padding:16px;margin-top:19px}.today-layout {grid-template-columns:1fr;gap:17px}
+  .today-metric > .icon {width:40px;height:40px}.today-section .usage-track {height:20px}
+  .disclosure > summary {padding:12px 17px;gap:10px}.summary-comparison {max-width:200px}
+  .detail-body {padding:4px 17px 20px}.metric-grid {grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .history-controls {align-items:flex-start;flex-wrap:wrap}
+  .table-head,.project-row,.other-details > summary,.total-row {grid-template-columns:minmax(115px,1.3fr) minmax(35px,.7fr) 43px;gap:9px;padding-left:8px;padding-right:8px}
+
+  .project-name {gap:6px}.project-name .icon {width:12px;height:12px}.project-bar {height:7px}.other-body {margin-left:14px;margin-right:8px;padding-left:10px}
+.privacy {padding:12px 17px;}
+  
+
+.model-summary .sep {margin:0 6px}
+  .model-costs {grid-template-columns:1fr;gap:10px}.model-cost {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1px 14px;padding:14px 0!important;border:0}
+  .model-cost h3 {grid-column:1;margin-bottom:4px}.model-cost p {grid-column:1;}
+  .model-cost .cost-value {grid-column:2;grid-row:1 / span 4;align-self:center;margin:0;}
+.sync-line {align-items:flex-start}.sync-copy .sync-time {display:block;width:100%;padding-left:12px}
+  .terminal-title .path {display:none}
+}
+@media(max-width:360px) {
+  .page {padding-left:10px;padding-right:10px}.product-mark {display:none}
+  .card-inner {padding:18px 14px}.track-labels {gap:6px}
+  .table-head,.project-row,.other-details > summary,.total-row {grid-template-columns:minmax(102px,1.3fr) minmax(28px,.7fr) 41px;gap:7px}
+}
+@media(prefers-reduced-motion:reduce) {* {scroll-behavior:auto!important;transition:none!important}}
+
+@media(max-width:600px) {
+  .masthead {display:grid;grid-template-columns:minmax(0,1fr) auto}
+  .identity {align-items:flex-start}
+  .product-mark {display:none}
+  .daily-chart {min-width:510px;padding-left:36px}
+  .chart-axis {top:30px;height:110px;width:27px;bottom:auto}
+  .chart-columns:before {top:30px}
+  .chart-columns:after {top:85px}
+  .day-value {height:20px;margin-bottom:10px}
+  .table-head,.project-row,.other-details > summary,.total-row {grid-template-columns:minmax(0,1fr) 56px;gap:12px}
+  .table-head span:nth-child(2) {display:none}
+  .project-row,.other-details > summary,.total-row {padding-top:10px;padding-bottom:10px}
+  .project-row > .project-name,.other-details > summary > .project-name {grid-column:1;grid-row:1}
+  .project-row > .project-percent,.other-details > summary > .project-percent,.total-row > .mono {grid-column:2;grid-row:1}
+  .project-row > .project-bar,.other-details > summary > .project-bar,.total-row > .project-bar {grid-column:1 / -1;grid-row:2}
+  .total-row > span:first-child {grid-column:1;grid-row:1}
+  .card-meta {padding-left:0;margin-top:0}
+  .card-title {align-items:flex-start}
+  .today-metric > .icon {display:none}
+  .disclosure > summary {flex-wrap:wrap}
+  .summary-comparison {max-width:none}
+  .summary-action {margin-left:auto}
+  .history-controls {gap:12px}
+  .model-summary {line-height:1.8}
+  .model-cost {grid-template-columns:minmax(0,1fr) auto;gap:1px 10px}
+  .compare-control {flex-wrap:wrap;justify-content:flex-start}
+  .band .part {white-space:normal}
+  .time-labels .now {position:static;transform:none}
+}
+
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true" style="position:absolute;overflow:hidden">
+<defs>
+  <symbol id="i-bars" viewBox="0 0 24 24"><path d="M5 20v-6m7 6V4m7 16V9" stroke-width="4"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 5 6 6-6 6m9 1h7"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 11h18m-13 5h3m3 0h2"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-model" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5Zm-9 9 9 5 9-5m-18 5 9 5 9-5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.4 1.4m11.2 11.2L19 19M5 19l1.4-1.4M17.6 6.4 19 5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14a8.5 8.5 0 0 1-10-10 8.5 8.5 0 1 0 10 10Z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="m9 3-.7 3-2.8 1L3 6l-2 4 2.5 2v3L2 17l3 4 3-1 3 1 1 2h4l1-3 2-2 3-.3 1-4-2.5-2-1-3 .5-3-4-2-2 2h-3Z" transform="translate(1 0) scale(.9)"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-caret" viewBox="0 0 12 12"><path d="m3 4.5 3 3 3-3"/></symbol>
+</defs>
+</svg>
+<main class="page">
+  <header class="masthead">
+    <div class="identity">
+      <span class="product-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="currentColor"><rect x="3" y="17" width="6" height="12" rx="2"/><rect x="13" y="3" width="6" height="26" rx="2"/><rect x="23" y="11" width="6" height="18" rx="2"/></svg></span>
+      <div><h1>Token Range Monitor</h1><p class="subtitle">Track your usage, limits, and the time you have left.</p></div>
+    </div>
+    <div class="header-tools"><span class="period-label"><svg class="icon" aria-hidden="true"><use href="#i-calendar"/></svg>This week</span><div class="theme-switch" role="group" aria-label="Appearance">
+      <button type="button" data-theme-choice="light" aria-label="Light appearance" aria-pressed="false" title="Light appearance"><svg class="icon"><use href="#i-sun"/></svg></button>
+      <button type="button" data-theme-choice="dark" aria-label="Dark appearance" aria-pressed="true" title="Dark appearance"><svg class="icon"><use href="#i-moon"/></svg></button>
+    </div></div>
+  </header>
+
+  <div class="pane-toolbar"><span><i class="dot"></i>Usage overview <span class="muted">· sample data</span></span><button class="text-button" type="button" id="toggle-details" aria-expanded="false">Expand all details</button></div>
+  <div class="pane" id="plugin-pane">
+    <section class="card weekly-card" id="weekly-card" data-part="weekly-card" aria-labelledby="week-title">
+      <div class="card-inner" data-part="weekly-card/drawing">
+        <header class="card-header"><div class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-calendar"/></svg><div><h2 id="week-title">This week</h2><p class="card-subtitle">Your weekly usage and limit</p></div></div><div class="card-meta">Resets Thu 11:00 <span style="color:var(--faint)">·</span> in 3d 19h</div></header>
+        <div class="weekly-overview">
+          
+          <div>
+            <div class="forecast-topline"><h3 class="forecast-headline">About 6% left at the reset</h3><span class="forecast-range">±12 pts</span></div>
+            <p class="forecast-copy">At your pace over the last 7 whole days: <strong>13.7% a day.</strong></p>
+            <p class="uncertainty-copy">Typical forecast miss: 12 points. Read this as between <strong>6% short and 18% to spare.</strong></p>
+            <div class="usage-block" aria-label="Weekly limit: 40% used, another 53.9% projected before the reset">
+              <div class="frame-label" style="margin-bottom:7px">This week · 100% = your weekly limit</div>
+              <div class="usage-track" aria-hidden="true"><span class="used-fill" style="width:40%"></span><span class="predicted-fill" style="width:53.9%"></span><span class="limit-mark"></span></div>
+              <div class="track-labels"><span><strong>40%</strong> used</span><span><strong>+53.9%</strong> at this pace</span><span>100% · resets Thu 11:00</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="daily-chart-viewport" tabindex="0" aria-label="Daily usage chart. Scroll horizontally to inspect all seven days on narrow screens.">
+        <div class="daily-chart" role="img" aria-label="Daily usage in percent of weekly limit: Thursday 16, Friday 14, Saturday 9, Sunday 1 used so far, Monday through Wednesday about 13.7 projected each. Daily budget shown as an outline.">
+          <div class="chart-axis" aria-hidden="true"><span>18%</span><span>9%</span><span>0%</span></div><div class="chart-columns" aria-hidden="true">
+            <div class="day"><span class="day-value">16%</span><div class="day-shape"><div class="day-bar" style="--bar:88.8889%"></div></div><span class="day-name">Thu<small>Oct 08</small></span></div>
+            <div class="day"><span class="day-value">14%</span><div class="day-shape"><div class="day-bar" style="--bar:77.7778%"></div></div><span class="day-name">Fri<small>Oct 09</small></span></div>
+            <div class="day"><span class="day-value">9%</span><div class="day-shape"><div class="day-bar" style="--bar:50%"></div></div><span class="day-name">Sat<small>Oct 10</small></span></div>
+            <div class="day today" style="--bar:5.5556%"><span class="day-value">1%</span><div class="day-shape"><div class="prediction"></div><div class="day-bar"></div><span class="budget-outline"></span></div><span class="day-name">Sun <span class="now-dot"></span><small>Oct 11 · now</small></span></div>
+            <div class="day future"><span class="day-value">~13.7%</span><div class="day-shape"><div class="day-bar" style="--bar:76.1111%"></div><span class="budget-outline"></span></div><span class="day-name">Mon<small>Oct 12</small></span></div>
+            <div class="day future"><span class="day-value">~13.7%</span><div class="day-shape"><div class="day-bar" style="--bar:76.1111%"></div><span class="budget-outline"></span></div><span class="day-name">Tue<small>Oct 13</small></span></div>
+            <div class="day future"><span class="day-value">~13.7%</span><div class="day-shape"><div class="day-bar" style="--bar:76.1111%"></div><span class="budget-outline"></span></div><span class="day-name">Wed<small>Oct 14</small></span></div>
+          </div>
+        </div>
+        </div>
+        <p class="chart-caption">Each day, in % of your weekly limit</p>
+        <div class="chart-footer"><div class="legend"><span class="legend-item"><i class="swatch"></i>Used</span><span class="legend-item"><i class="swatch striped"></i>Expected at your pace</span></div><label class="budget-toggle"><input type="checkbox" id="budget-toggle" checked>Show daily budget</label></div>
+        <section class="today-section" aria-labelledby="today-title">
+          <div class="today-layout">
+            <div class="today-metric"><svg class="icon" aria-hidden="true"><use href="#i-bars"/></svg><div class="today-title"><h3 id="today-title">Predicted use today</h3><span class="value">89.9% <small>of daily budget</small></span></div></div>
+            <div><div class="frame-label">Today · 100% = today’s budget</div><div class="usage-block" aria-label="Today's daily budget: 6.6% used, 89.9% predicted"><div class="usage-track" aria-hidden="true"><span class="used-fill" style="width:6.6%"></span><span class="predicted-fill" style="width:83.3%"></span><span class="limit-mark"></span></div><div class="track-labels"><span><strong>6.6%</strong> used</span><span><strong>89.9%</strong> predicted</span><span>100% · day ends 11:00</span></div></div></div>
+          </div>
+          <p class="forecast-copy">Until the day ends, today counts as at least one day at your pace, 89.9% of the budget. Today’s budget is what’s left of the week divided by the days left: <strong>15.3% of your weekly limit.</strong></p>
+        </section>
+      </div>
+      <details class="disclosure" data-part="weekly-card/details">
+        <summary><span class="summary-comparison">Usage chart, pace &amp; last window</span><span class="summary-action"><span class="show-label">Details</span><span class="hide-label">Hide details</span><svg class="caret" aria-hidden="true"><use href="#i-caret"/></svg></span></summary>
+        <div class="detail-body">
+          <dl class="metric-grid" data-part="weekly-card/details/1.3-head"><div><dt>At week reset</dt><dd class="good">13% to spare</dd></div><div><dt>Your pace</dt><dd>12.5% a day</dd></div><div><dt>Safe pace</dt><dd>15.8% a day</dd></div><div><dt>Last window</dt><dd class="good">5% to spare</dd></div></dl>
+          <div class="history-chart" data-part="weekly-card/details/1.3-chart" role="img" aria-label="Original 1.3 weekly pace history, in percent per day, with your pace of 12.5 and safe pace of 15.8"><div class="history-plot"><svg xmlns="http://www.w3.org/2000/svg" width="100%" height="360" viewBox="0 0 560 360" preserveAspectRatio="xMidYMin meet" aria-hidden="true"><defs>
+    
+    <linearGradient id="week_history-plot" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:var(--dim)" stop-opacity="0" /><stop offset="1" style="stop-color:var(--dim)" stop-opacity="0.07" /></linearGradient>
+  </defs><rect x="0" y="29" width="100%" height="302" rx="6" fill="url(#week_history-plot)" /><line x1="0" x2="100%" y1="255.5" y2="255.5" style="stroke:var(--dim)" stroke-opacity="0.18" /><line x1="0" x2="100%" y1="180" y2="180" style="stroke:var(--dim)" stroke-opacity="0.18" /><line x1="0" x2="100%" y1="104.5" y2="104.5" style="stroke:var(--dim)" stroke-opacity="0.18" /><line x1="25.000%" x2="25.000%" y1="29" y2="331" style="stroke:var(--dim)" stroke-opacity="0.18" stroke-dasharray="4 4" /><line x1="50.000%" x2="50.000%" y1="29" y2="331" style="stroke:var(--dim)" stroke-opacity="0.18" stroke-dasharray="4 4" /><line x1="75.000%" x2="75.000%" y1="29" y2="331" style="stroke:var(--dim)" stroke-opacity="0.18" stroke-dasharray="4 4" /><rect x="0.641%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><rect x="3.205%" y="56.5" width="1.282%" height="274.5" rx="1.5" fill="var(--accent)" /><rect x="5.769%" y="40.8" width="1.282%" height="290.2" rx="1.5" fill="var(--accent)" /><rect x="8.333%" y="182.0" width="1.282%" height="149.0" rx="1.5" fill="var(--accent)" /><rect x="10.897%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><rect x="13.462%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><line x1="15.385%" x2="17.949%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="17.949%" x2="20.513%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="20.513%" x2="23.077%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="23.077%" x2="25.641%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="25.641%" x2="28.205%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><rect x="28.846%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><rect x="31.410%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><rect x="33.974%" y="40.8" width="1.282%" height="290.2" rx="1.5" fill="var(--accent)" /><rect x="36.538%" y="111.4" width="1.282%" height="219.6" rx="1.5" fill="var(--accent)" /><rect x="39.103%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><rect x="41.667%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><rect x="44.231%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><line x1="46.154%" x2="48.718%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="48.718%" x2="51.282%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="51.282%" x2="53.846%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="53.846%" x2="56.410%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="56.410%" x2="58.974%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><rect x="59.615%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><rect x="62.179%" y="229.0" width="1.282%" height="102.0" rx="1.5" fill="var(--accent)" /><rect x="64.744%" y="127.1" width="1.282%" height="203.9" rx="1.5" fill="var(--accent)" /><rect x="67.308%" y="229.0" width="1.282%" height="102.0" rx="1.5" fill="var(--accent)" /><rect x="69.872%" y="158.4" width="1.282%" height="172.6" rx="1.5" fill="var(--accent)" /><rect x="72.436%" y="197.6" width="1.282%" height="133.4" rx="1.5" fill="var(--accent)" /><rect x="75.000%" y="229.0" width="1.282%" height="102.0" rx="1.5" fill="var(--accent)" /><rect x="77.564%" y="229.0" width="1.282%" height="102.0" rx="1.5" fill="var(--accent)" /><line x1="79.487%" x2="82.051%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="82.051%" x2="84.615%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="84.615%" x2="87.179%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="87.179%" x2="89.744%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="89.744%" x2="92.308%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="92.308%" x2="94.872%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="94.872%" x2="97.436%" y1="330" y2="330" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><rect x="98.077%" y="229.0" width="1.282%" height="102.0" rx="1.5" fill="var(--accent)" /><line x1="0" x2="100%" y1="198.25274725274724" y2="198.25274725274724" style="stroke:var(--limit)" stroke-width="2.5" /><line x1="0" x2="100%" y1="226.4112554112554" y2="226.4112554112554" style="stroke:var(--fg)" stroke-width="3" stroke-dasharray="3 5" stroke-linecap="round" /><rect x="4.0" y="183.0" width="21.4" height="17.2" rx="4" style="fill:var(--veil)" fill-opacity="0.6" /><rect x="4.0" y="32.0" width="21.4" height="17.2" rx="4" style="fill:var(--veil)" fill-opacity="0.6" /><svg x="100.000%" y="0" width="1" height="1" overflow="visible"><rect x="-129.2" y="187.8" width="125.2" height="21.0" rx="6" style="fill:var(--veil)" fill-opacity="0.6" /></svg><svg x="100.000%" y="0" width="1" height="1" overflow="visible"><rect x="-129.2" y="215.9" width="125.2" height="21.0" rx="6" style="fill:var(--veil)" fill-opacity="0.6" /></svg></svg><span class="history-label" aria-hidden="true" style="left:0.3571%;top:6.1944%;transform:translate(0%,-80%);color:var(--dim);font-weight:400">% per day · bar = 1h 58m</span><span class="history-label" aria-hidden="true" style="left:0.0000%;top:98.1389%;transform:translate(0%,-80%);color:var(--dim);font-weight:400">−3.2d</span><span class="history-label" aria-hidden="true" style="left:25.0000%;top:98.1389%;transform:translate(-50%,-80%);color:var(--dim);font-weight:400">−2.4d</span><span class="history-label" aria-hidden="true" style="left:50.0000%;top:98.1389%;transform:translate(-50%,-80%);color:var(--dim);font-weight:400">−1.6d</span><span class="history-label" aria-hidden="true" style="left:75.0000%;top:98.1389%;transform:translate(-50%,-80%);color:var(--dim);font-weight:400">−0.8d</span><span class="history-label" aria-hidden="true" style="left:100.0000%;top:98.1389%;transform:translate(-100%,-80%);color:var(--fg);font-weight:600">Now</span><span class="history-label" aria-hidden="true" style="left:1.4286%;top:54.2222%;transform:translate(0%,-80%);color:var(--dim);font-weight:400">18</span><span class="history-label" aria-hidden="true" style="left:1.4286%;top:12.2778%;transform:translate(0%,-80%);color:var(--dim);font-weight:400">36</span><span class="history-label" aria-hidden="true" style="left:97.8571%;top:56.3333%;transform:translate(-100%,-80%);color:var(--limit);font-weight:500">safe pace 15.8</span><span class="history-label" aria-hidden="true" style="left:97.8571%;top:64.1667%;transform:translate(-100%,-80%);color:var(--fg);font-weight:500">your pace 12.5</span></div></div>
+          <div class="history-controls"><p>Average since the reset 3d 5h ago.</p><div class="segmented" role="group" aria-label="Weekly history period"><button type="button" id="since-reset" aria-pressed="true">Since reset</button><button type="button" id="custom-period" aria-pressed="false" aria-expanded="false" aria-controls="custom-range">Custom</button></div></div>
+          <div class="custom-range" id="custom-range" hidden><label>From <input type="datetime-local" aria-label="Custom period start" value="2026-10-10T11:00" min="2026-10-08T11:00" max="2026-10-11T16:00"></label><p>Sample-data preview. Custom periods can be selected here; historical values remain those in the original example.</p></div>
+          <p class="detail-copy">Last window is what was left of this limit when its previous window reset. Short means it ran out early: how much more you would have needed for the rest of that window, at the pace you used it until then.</p>
+          <p class="detail-copy">It ended at <span class="mono">95% used.</span></p>
+        </div>
+      </details>
+    </section>
+
+    <section class="card five-hour" data-part="five-hour-card" aria-labelledby="five-title">
+      <div class="card-inner" data-part="five-hour-card/drawing">
+        <header class="card-header"><div class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg><div><h2 id="five-title">5-hour window</h2><p class="card-subtitle">Track your short-term limit and usage</p></div></div><span class="card-meta">Opened 13:10 · resets 18:10</span></header>
+        <div class="window-overview"><div class="window-outlook">
+        <div class="frame-label">100% = your 5-hour limit</div>
+        <h3 class="cutoff-title">Cut off <span class="bad time">~17:36</span> at this pace</h3>
+        <p class="forecast-copy"><strong class="mono">64% used</strong> since 13:10, <strong class="mono">22.6% an hour.</strong> It resets at 18:10, <span class="bad">34m after the cut-off.</span></p>
+        <div class="time-chart" role="img" aria-label="5-hour window from 13:10 to 18:10. Now 16:00. Projected cut-off about 17:36, 34 minutes before reset."><div class="time-track" aria-hidden="true"><span class="used-fill"></span><span class="predicted-fill"></span><span class="cutoff-zone"></span><span class="now-marker"></span><span class="cutoff-marker"><span>cut off ~17:36</span></span></div><div class="time-labels" aria-hidden="true"><span>13:10</span><span class="now">now 16:00</span><span>reset 18:10</span></div></div>
+        </div></div>
+      </div>
+      <details class="disclosure" data-part="five-hour-card/details"><summary><span>Runs out in <span class="mono bad">1h 36m</span> · 34m early</span><span class="summary-action"><span class="show-label">Details</span><span class="hide-label">Hide details</span><svg class="caret" aria-hidden="true"><use href="#i-caret"/></svg></span></summary><div class="detail-body">
+        <dl class="metric-grid" data-part="five-hour-card/details/1.3-head"><div><dt>At 5h reset</dt><dd class="bad">13% short</dd></div><div><dt>Your pace</dt><dd>22.6% an hour</dd></div><div><dt>Safe pace</dt><dd>16.6% an hour</dd></div><div><dt>Last window</dt><dd class="good">28% to spare</dd></div></dl>
+        <div class="history-chart" data-part="five-hour-card/details/1.3-chart" role="img" aria-label="Original 1.3 five-hour pace history, in percent per hour, with your pace of 22.6 and safe pace of 16.6"><div class="history-plot"><svg xmlns="http://www.w3.org/2000/svg" width="100%" height="260" viewBox="0 0 560 260" preserveAspectRatio="xMidYMin meet" aria-hidden="true"><defs>
+    
+    <linearGradient id="five_history-plot" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:var(--dim)" stop-opacity="0" /><stop offset="1" style="stop-color:var(--dim)" stop-opacity="0.07" /></linearGradient>
+  </defs><rect x="0" y="29" width="100%" height="202" rx="6" fill="url(#five_history-plot)" /><line x1="0" x2="100%" y1="180.5" y2="180.5" style="stroke:var(--dim)" stroke-opacity="0.18" /><line x1="0" x2="100%" y1="130" y2="130" style="stroke:var(--dim)" stroke-opacity="0.18" /><line x1="0" x2="100%" y1="79.5" y2="79.5" style="stroke:var(--dim)" stroke-opacity="0.18" /><line x1="25.000%" x2="25.000%" y1="29" y2="231" style="stroke:var(--dim)" stroke-opacity="0.18" stroke-dasharray="4 4" /><line x1="50.000%" x2="50.000%" y1="29" y2="231" style="stroke:var(--dim)" stroke-opacity="0.18" stroke-dasharray="4 4" /><line x1="75.000%" x2="75.000%" y1="29" y2="231" style="stroke:var(--dim)" stroke-opacity="0.18" stroke-dasharray="4 4" /><line x1="0.000%" x2="2.941%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="2.941%" x2="5.882%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="5.882%" x2="8.824%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="8.824%" x2="11.765%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="11.765%" x2="14.706%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="14.706%" x2="17.647%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><rect x="18.382%" y="160.1" width="1.471%" height="70.9" rx="1.5" fill="var(--accent)" /><rect x="21.324%" y="142.3" width="1.471%" height="88.7" rx="1.5" fill="var(--accent)" /><rect x="24.265%" y="213.3" width="1.471%" height="17.7" rx="1.5" fill="var(--accent)" /><line x1="26.471%" x2="29.412%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="29.412%" x2="32.353%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="32.353%" x2="35.294%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="35.294%" x2="38.235%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="38.235%" x2="41.176%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><rect x="41.912%" y="154.1" width="1.471%" height="76.9" rx="1.5" fill="var(--accent)" /><rect x="44.853%" y="134.9" width="1.471%" height="96.1" rx="1.5" fill="var(--accent)" /><rect x="47.794%" y="211.8" width="1.471%" height="19.2" rx="1.5" fill="var(--accent)" /><line x1="50.000%" x2="52.941%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="52.941%" x2="55.882%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="55.882%" x2="58.824%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="58.824%" x2="61.765%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="61.765%" x2="64.706%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><rect x="65.441%" y="154.1" width="1.471%" height="76.9" rx="1.5" fill="var(--accent)" /><rect x="68.382%" y="134.9" width="1.471%" height="96.1" rx="1.5" fill="var(--accent)" /><rect x="71.324%" y="211.8" width="1.471%" height="19.2" rx="1.5" fill="var(--accent)" /><line x1="73.529%" x2="76.471%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="76.471%" x2="79.412%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="79.412%" x2="82.353%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="82.353%" x2="85.294%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="85.294%" x2="88.235%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="88.235%" x2="91.176%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><line x1="91.176%" x2="94.118%" y1="230" y2="230" style="stroke:var(--barBottom)" stroke-width="1.5" stroke-dasharray="5 4" /><rect x="94.853%" y="77.3" width="1.471%" height="153.7" rx="1.5" fill="var(--accent)" /><rect x="97.794%" y="38.9" width="1.471%" height="192.1" rx="1.5" fill="var(--accent)" /><line x1="0" x2="100%" y1="210.5347091932458" y2="210.5347091932458" style="stroke:var(--limit)" stroke-width="2.5" /><line x1="0" x2="100%" y1="203.17790530846486" y2="203.17790530846486" style="stroke:var(--fg)" stroke-width="3" stroke-dasharray="3 5" stroke-linecap="round" /><rect x="4.0" y="133.0" width="21.4" height="17.2" rx="4" style="fill:var(--veil)" fill-opacity="0.6" /><rect x="4.0" y="32.0" width="28.2" height="17.2" rx="4" style="fill:var(--veil)" fill-opacity="0.6" /><svg x="100.000%" y="0" width="1" height="1" overflow="visible"><rect x="-129.2" y="208.0" width="125.2" height="21.0" rx="6" style="fill:var(--veil)" fill-opacity="0.6" /></svg><svg x="100.000%" y="0" width="1" height="1" overflow="visible"><rect x="-129.2" y="183.0" width="125.2" height="21.0" rx="6" style="fill:var(--veil)" fill-opacity="0.6" /></svg></svg><span class="history-label" aria-hidden="true" style="left:0.3571%;top:8.5769%;transform:translate(0%,-80%);color:var(--dim);font-weight:400">% per hour · bar = 5m</span><span class="history-label" aria-hidden="true" style="left:0.0000%;top:97.4231%;transform:translate(0%,-80%);color:var(--dim);font-weight:400">−2.8h</span><span class="history-label" aria-hidden="true" style="left:25.0000%;top:97.4231%;transform:translate(-50%,-80%);color:var(--dim);font-weight:400">−2.1h</span><span class="history-label" aria-hidden="true" style="left:50.0000%;top:97.4231%;transform:translate(-50%,-80%);color:var(--dim);font-weight:400">−1.4h</span><span class="history-label" aria-hidden="true" style="left:75.0000%;top:97.4231%;transform:translate(-50%,-80%);color:var(--dim);font-weight:400">−0.7h</span><span class="history-label" aria-hidden="true" style="left:100.0000%;top:97.4231%;transform:translate(-100%,-80%);color:var(--fg);font-weight:600">Now</span><span class="history-label" aria-hidden="true" style="left:1.4286%;top:55.8462%;transform:translate(0%,-80%);color:var(--dim);font-weight:400">82</span><span class="history-label" aria-hidden="true" style="left:1.4286%;top:17.0000%;transform:translate(0%,-80%);color:var(--dim);font-weight:400">164</span><span class="history-label" aria-hidden="true" style="left:97.8571%;top:85.8077%;transform:translate(-100%,-80%);color:var(--limit);font-weight:500">safe pace 16.6</span><span class="history-label" aria-hidden="true" style="left:97.8571%;top:76.1923%;transform:translate(-100%,-80%);color:var(--fg);font-weight:500">your pace 22.6</span></div></div>
+        <p class="detail-copy" style="margin-top:14px">Average since the 5-hour window opened 2h 50m ago. Resets in 2h 10m.</p>
+        <p class="detail-copy">Last window is what was left of this limit when its previous window reset. Short means it ran out early: how much more you would have needed for the rest of that window, at the pace you used it until then.</p>
+        <p class="detail-copy">It ended at <span class="mono">72% used.</span></p>
+      </div></details>
+    </section>
+
+    <section class="card models" data-part="models-card" aria-labelledby="models-title">
+      <div class="card-inner" data-part="models-card/head"><header class="card-header"><div class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-model"/></svg><div><h2 id="models-title">Models</h2><p class="card-subtitle">Relative token costs, learned from your usage</p></div></div><span class="card-meta">Learned from 13 days</span></header>
+        <p class="model-summary"><span class="model-color" style="background:var(--opus)"></span>Opus 5.5 <span data-cost-summary="opus">4.7×</span><span class="sep">·</span><span class="model-color" style="background:var(--sonnet)"></span>Sonnet 5.5 <span data-cost-summary="sonnet">1×</span><span class="sep">·</span><span class="model-color" style="background:var(--haiku)"></span>Haiku 5.5 learning</p>
+      </div>
+      <details class="disclosure"><summary><span>Relative token cost &amp; weekly usage</span><span class="summary-action"><span class="show-label">Details</span><span class="hide-label">Hide details</span><svg class="caret" aria-hidden="true"><use href="#i-caret"/></svg></span></summary><div class="detail-body">
+        <div class="model-costs" data-part="models-card/costs">
+          <div class="model-cost" style="--model:var(--opus)"><h3>Opus 5.5 <span class="baseline" data-baseline="opus" hidden>baseline</span></h3><span class="cost-value" data-cost="opus" style="color:var(--opus)">4.7×</span><p>1,840 responses</p><p data-range="opus">likely 4.0×–5.4×</p></div>
+          <div class="model-cost" style="--model:var(--sonnet)"><h3>Sonnet 5.5 <span class="baseline" data-baseline="sonnet">baseline</span></h3><span class="cost-value" data-cost="sonnet" style="color:var(--sonnet)">1×</span><p>1,210 responses</p><p data-range="sonnet">the others compare to this</p></div>
+          <div class="model-cost"><h3>Haiku 5.5</h3><span class="cost-value learning">Learning</span><p>40 responses, all subagents</p><p>Not sure enough yet</p><p>Shows at ±20% · ~320 more responses</p></div>
+        </div>
+        <div class="compare-control"><span>Compare with</span><div class="segmented" role="group" aria-label="Model cost baseline"><button type="button" data-compare="opus" aria-pressed="false">Opus 5.5</button><button type="button" data-compare="sonnet" aria-pressed="true">Sonnet 5.5</button></div></div>
+        <div data-part="models-card/this-week"><h3 class="model-usage-heading">This week · 40% of limit used<small>% of the weekly limit, by model and effort</small></h3>
+          <div class="model-row" style="--model:var(--opus)"><div class="model-row-head"><span class="model-label"><i class="model-dot"></i>Opus 5.5</span><span class="mono">24.8%</span></div><div class="effort-track" aria-hidden="true"><span style="--width:20%"></span><span style="--width:4.8%"></span></div><div class="effort-tags"><span>high <span class="muted">20%</span></span><span>medium <span class="muted">4.8%</span></span></div></div>
+          <div class="model-row" style="--model:var(--sonnet)"><div class="model-row-head"><span class="model-label"><i class="model-dot"></i>Sonnet 5.5</span><span class="mono">8.4%</span></div><div class="effort-track" aria-hidden="true"><span style="--width:8.4%"></span></div><div class="effort-tags"><span>high <span class="muted">8.4%</span></span></div></div>
+          <div class="model-row quiet"><div class="model-row-head"><span class="model-label"><i class="model-dot"></i>Not split yet</span><span class="mono">2%</span></div></div>
+          <div class="model-row quiet"><div class="model-row-head"><span class="model-label"><i class="model-dot" style="background:transparent;border:1px solid var(--faint)"></i>Not recorded</span><span class="mono">4.8%</span></div></div>
+        </div>
+        <p class="detail-copy models-explanation">Cost: how much of your limit each model uses token for token, compared with the model you pick. Learned from your history; shown once it’s within ±20%. This week: the % of the weekly limit that went to each model, by effort.</p>
+      </div></details>
+    </section>
+    <div class="sync-line" data-part="sync-line"><span class="sync-copy"><i class="dot"></i><span>Synced across devices</span><span class="sync-time">· last sync 3 min ago</span></span><button class="text-button" type="button" id="settings-button"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>Settings</button></div>
+  </div>
+
+  <details class="specimen"><summary><span>Above the prompt</span><svg class="caret" aria-hidden="true"><use href="#i-caret"/></svg></summary><div class="specimen-body">
+<div class="terminal-preview" data-part="band-full">
+    <div class="terminal-title"><svg class="icon" aria-hidden="true" style="width:14px;height:14px"><use href="#i-terminal"/></svg><span>Claude Code</span><span class="path">~/token-range-monitor</span></div>
+    <div class="band">
+      <span class="part" data-part="band-week"><span class="muted">Week </span><b class="good">6% to spare ±12</b><span class="muted">, resets in 3d 19h</span></span>
+      <span class="separator">·</span>
+      <span class="part" data-part="band-five"><span class="muted">5h </span><b class="bad">cut off ~17:36</b><span class="muted">, resets 18:10</span></span>
+      <button class="tiny-btn" type="button" data-jump="weekly-card">Details ↗</button>
+    </div>
+    <div class="prompt"><span class="chevron">›</span><span>Try “fix the failing test”</span></div>
+  </div>
+  </div></details>
+  <details class="specimen"><summary><span>Narrow prompt preview</span><svg class="caret" aria-hidden="true"><use href="#i-caret"/></svg></summary><div class="specimen-body"><div class="terminal-preview narrow-preview" data-part="band-narrow"><div class="band"><span class="part" data-part="band-week"><span class="muted">Week </span><b class="good">+6% ±12</b><span class="muted"> 3d 19h</span></span><span class="separator">·</span><span class="part" data-part="band-five"><span class="muted">5h </span><b class="bad">out 17:36</b></span><button class="tiny-btn" type="button" data-jump="weekly-card">Details ↗</button></div><div class="prompt"><span class="chevron">›</span><span>Ask Claude…</span></div></div></div></details>
+  <details class="specimen"><summary><span>Terminal · the same figures as text</span><svg class="caret" aria-hidden="true"><use href="#i-caret"/></svg></summary><div class="specimen-body"><pre class="terminal-text" data-part="terminal-weekly"><span class="cmd">› /range</span>
+
+<strong>This week · 100% = your weekly limit</strong>
+<span class="good">About 6% left at the reset ±12</span>
+At your pace over the last 7 whole days: 13.7% a day.
+Your projections have typically been off by 12 points, so read it as between 6% short and 18% to spare.
+
+Thu 16% · Fri 14% · Sat 9% · Sun 1% now
+Mon ~13.7% · Tue ~13.7% · Wed ~13.7%
+
+<strong>Today · 100% = today’s budget</strong>
+Predicted use today: 89.9% of daily budget
+Until the day ends, today counts as at least one day at your pace, 89.9% of the budget. Today’s budget is what’s left of the week divided by the days left: 15.3% of your weekly limit.</pre></div></details>
+  <footer class="footer"><span>Token Range Monitor <span style="color:var(--muted)">/ v1.4.0</span></span><span>Interface preview · sample data · Oct 11, 16:00</span></footer>
+</main>
+<dialog id="settings-dialog" aria-labelledby="settings-title">
+  <div class="dialog-head"><h2 id="settings-title">Preview settings</h2><button type="button" id="close-settings" aria-label="Close settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+  <p class="detail-copy" style="margin-bottom:18px">Appearance options for this interface preview.</p>
+  <label class="settings-row"><span>Appearance</span><select id="theme-select"><option value="dark">Dark</option><option value="light">Light</option></select></label>
+  <label class="settings-row"><span>Show all pane details</span><input type="checkbox" id="show-all-details"></label>
+  <p class="detail-copy">The usage figures and sync status are sample data from the original design.</p>
+</dialog>
+<script>
+(() => {
+  'use strict';
+  const root = document.documentElement;
+  const appearanceButtons = [...document.querySelectorAll('[data-theme-choice]')];
+  const themeSelect = document.getElementById('theme-select');
+  function setTheme(theme) {
+    root.dataset.theme = theme;
+    appearanceButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.themeChoice === theme)));
+    themeSelect.value = theme;
+    try { localStorage.setItem('trm-design-appearance', theme); } catch {}
+  }
+  let savedTheme;
+  try { savedTheme = localStorage.getItem('trm-design-appearance'); } catch {}
+  if (savedTheme === 'light' || savedTheme === 'dark') setTheme(savedTheme);
+  appearanceButtons.forEach(button => button.addEventListener('click', () => setTheme(button.dataset.themeChoice)));
+  themeSelect.addEventListener('change', () => setTheme(themeSelect.value));
+
+  const paneDetails = [...document.querySelectorAll('#plugin-pane details')];
+  const detailsToggle = document.getElementById('toggle-details');
+  const showAll = document.getElementById('show-all-details');
+  function reflectDetails() {
+    const allOpen = paneDetails.every(detail => detail.open);
+    detailsToggle.textContent = allOpen ? 'Collapse details' : 'Expand all details';
+    detailsToggle.setAttribute('aria-expanded', String(allOpen));
+    showAll.checked = allOpen;
+    showAll.indeterminate = !allOpen && paneDetails.some(detail => detail.open);
+  }
+  function setAllDetails(open) { paneDetails.forEach(detail => { detail.open = open; }); reflectDetails(); }
+  detailsToggle.addEventListener('click', () => setAllDetails(!paneDetails.every(detail => detail.open)));
+  showAll.addEventListener('change', () => setAllDetails(showAll.checked));
+  paneDetails.forEach(detail => detail.addEventListener('toggle', reflectDetails));
+  reflectDetails();
+  const budgetToggle = document.getElementById('budget-toggle');
+  const dailyChart = document.querySelector('.daily-chart');
+  const chartLabel = dailyChart.getAttribute('aria-label').replace(' Daily budget shown as an outline.', '');
+  budgetToggle.addEventListener('change', () => {
+    dailyChart.dataset.showBudget = String(budgetToggle.checked);
+    dailyChart.setAttribute('aria-label', chartLabel + (budgetToggle.checked ? ' Daily budget shown as an outline.' : ' Daily budget outlines hidden.'));
+  });
+  document.querySelectorAll('[data-jump]').forEach(button => button.addEventListener('click', () => {
+    const target = document.getElementById(button.dataset.jump);
+    target.querySelector('details').open = true;
+    target.scrollIntoView({block:'start', behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
+  }));
+
+  const sinceReset = document.getElementById('since-reset');
+  const customPeriod = document.getElementById('custom-period');
+  const customRange = document.getElementById('custom-range');
+  function setCustom(open) {
+    customRange.hidden = !open;
+    sinceReset.setAttribute('aria-pressed', String(!open));
+    customPeriod.setAttribute('aria-pressed', String(open));
+    customPeriod.setAttribute('aria-expanded', String(open));
+  }
+  sinceReset.addEventListener('click', () => setCustom(false));
+  customPeriod.addEventListener('click', () => setCustom(true));
+
+  document.querySelectorAll('[data-compare]').forEach(button => button.addEventListener('click', () => {
+    const isOpus = button.dataset.compare === 'opus';
+    document.querySelectorAll('[data-compare]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    const costs = {opus:isOpus ? '1×' : '4.7×', sonnet:isOpus ? '0.21×' : '1×'};
+    Object.entries(costs).forEach(([model, value]) => {
+      document.querySelector('[data-cost="'+model+'"]').textContent = value;
+      document.querySelector('[data-cost-summary="'+model+'"]').textContent = value;
+      document.querySelector('[data-baseline="'+model+'"]').hidden = (isOpus ? 'opus' : 'sonnet') !== model;
+    });
+    document.querySelector('[data-range="opus"]').textContent = isOpus ? 'the others compare to this' : 'likely 4.0×–5.4×';
+    document.querySelector('[data-range="sonnet"]').textContent = isOpus ? 'likely 0.19×–0.25×' : 'the others compare to this';
+  }));
+  const settings = document.getElementById('settings-dialog');
+  document.getElementById('settings-button').addEventListener('click', () => settings.showModal());
+  document.getElementById('close-settings').addEventListener('click', () => settings.close());
+})();
+</script>
+</body>
+</html>

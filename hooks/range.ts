@@ -528,12 +528,12 @@ export function paceText(m: Model): string | null {
 
 /** The card's colours, as CSS variables a chart's <style> sets from the person's theme (see theme.ts). */
 export const C = Object.fromEntries(
-  (['card', 'veil', 'fg', 'dim', 'off', 'barTop', 'barBottom', 'limit', 'over', 'under', 'bad', 'fable', 'opus', 'sonnet', 'haiku'] as const).map(k => [k, v(k)]),
+  (['card', 'veil', 'fg', 'dim', 'off', 'barTop', 'barBottom', 'limit', 'over', 'under', 'bad', 'fable', 'opus', 'sonnet', 'haiku',
+    'surface', 'raised', 'inset', 'panel', 'line', 'muted', 'faint', 'accent', 'accentBg', 'badBg', 'solid'] as const).map(k => [k, v(k)]),
 ) as Record<PaletteKey, string>
-/** IBM Plex for words, Plex Mono for figures that line up; the system's own faces where Plex can't load. */
-export const FONT = "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif"
-export const MONO = "'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace"
-const FONTS = `<style>@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap');</style>`
+/** The system's own sans, as the pane's design sets it; figures in it line up (tabular numbers, see `drawing`). */
+export const FONT = "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+export const MONO = FONT
 
 /**
  * Every text style in the drawings, by role: size in rem (1rem = 16px), weight,
@@ -576,7 +576,7 @@ export const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 const FRAME_W = 2000
 /** A drawing of `content`, `height` pixels tall, filling whatever width its frame has. */
 export function drawing(content: string, height: number, pal: Palettes = DEFAULT_PALETTES): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${FRAME_W}" height="${Math.ceil(height)}">${FONTS}<style>:root{width:100%;height:100%;overflow:hidden}</style>${paletteStyle(pal)}${content}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${FRAME_W}" height="${Math.ceil(height)}"><style>:root{width:100%;height:100%;overflow:hidden}text{font-variant-numeric:tabular-nums}</style>${paletteStyle(pal)}${content}</svg>`
 }
 /** A drawing's height: what its frame is given. */
 export const drawingHeight = (svg: string) => Number(/^<svg [^>]* height="(\d+)">/.exec(svg)![1])

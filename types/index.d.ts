@@ -12,16 +12,17 @@ export type RangeCheck = { resetsAt: number; at: Array<[t: number, left: number]
 
 /**
  * One model response seen here, subagents' included: when, the model's id, the effort it was asked for
- * ('' for none), its tokens weighted by that model's price ratios, 1 when a subagent made it, and the project
- * the response was made in (see hooks/projects.ts; absent for responses recorded before 1.4). The project is never synced.
+ * ('' for none), its tokens weighted by that model's price ratios, and 1 when a subagent made it. Responses recorded
+ * by 1.4.0 also carry the project they were made in (that release's projects card, since removed): it is never synced.
  */
 export type RangeStep = [t: number, model: string, effort: string, units: number, sub: 0 | 1, project?: string]
 
 /**
  * What the weekly average covers (a window of n units, or since the reset), whether reset countdowns show
- * the finer unit, and the model the others' costs compare to (a model id; absent, the default).
+ * the finer unit, the model the others' costs compare to (a model id; absent, the default), and whether the
+ * weekly card's daily budget outlines are hidden.
  */
-export type RangeSettings = { mode: 'window' | 'reset'; n: number; unit: 'h' | 'd' | 'w'; fine: boolean; baseline?: string }
+export type RangeSettings = { mode: 'window' | 'reset'; n: number; unit: 'h' | 'd' | 'w'; fine: boolean; baseline?: string; hideBudget?: boolean }
 
 /** The colours the card draws with, as hex. */
 export type Palette = {
@@ -29,6 +30,10 @@ export type Palette = {
   barTop: string; barBottom: string; limit: string; over: string; under: string; bad: string
   /** A colour per model family. */
   fable: string; opus: string; sonnet: string; haiku: string
+  /** The card's surfaces, as the pane's design names them: the card, a raised chip, the inset strip, the panel within. */
+  surface: string; raised: string; inset: string; panel: string; line: string
+  /** Its inks: muted and faint text, the accent and its tint, what's short and its tint, the neutral solid grey. */
+  muted: string; faint: string; accent: string; accentBg: string; badBg: string; solid: string
 }
 
 /** The card's palettes for a dark and a light appearance, derived from the theme, and which one the theme itself is. */

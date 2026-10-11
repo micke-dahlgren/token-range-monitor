@@ -129,38 +129,78 @@ function legible(c: RGB, bg: RGB, toward: RGB, min: number): RGB {
 
 export type PaletteKey = keyof Palette
 
+/** The design's inks for each appearance: what the built-in presets draw with. */
+type Inks = Pick<Palette, 'fg' | 'muted' | 'faint' | 'accent' | 'bad' | 'solid' | 'fable' | 'opus' | 'sonnet' | 'haiku'>
+const DESIGN: { dark: Inks; light: Inks } = {
+  dark: { fg: '#f2efeb', muted: '#aaa7a3', faint: '#8e8a85', accent: '#df9a7c', bad: '#e7a19b', solid: '#a9a5a0', fable: '#cdb39c', opus: '#df9a7c', sonnet: '#b9ada1', haiku: '#999590' },
+  light: { fg: '#302e2b', muted: '#716b64', faint: '#807970', accent: '#a85f42', bad: '#ae504b', solid: '#aaa197', fable: '#8f6a52', opus: '#a85f42', sonnet: '#827365', haiku: '#8d8780' },
+}
 /**
- * The card's palette from one appearance's tokens. The card is the theme's
- * message background, and the veil behind a label its inverse text colour, the
- * appearance's own black or white; bars are the Claude colour warming toward the
- * warning colour; the limit line is the suggestion colour; over, under and
- * short are warning, success and error. Every colour that carries meaning is
- * nudged toward the text colour until it reads on the card.
+ * The design's tones within a card, as overlays on whatever the card is: a raised chip, the panel inside a
+ * card, the inset strip under it, a hairline. Overlays, so they sit right on the app's own card colour.
+ */
+const TONES = {
+  dark: { raised: '#ffffff14', panel: '#ffffff0b', inset: '#0000002e', line: '#ffffff1c' },
+  light: { raised: '#0000000f', panel: '#00000008', inset: '#00000009', line: '#0000001a' },
+}
+
+const same = (a: RGB, b: RGB) => a.every((v, i) => Math.abs(v - b[i]!) < 1)
+
+/**
+ * The card's palette from one appearance's tokens. The card is the theme's message background and the
+ * veil behind a label its inverse text colour; the built-in presets' inks are the design's own warm ones,
+ * and a theme that sets its own colours carries them over: its text, its Claude colour as the accent, its
+ * error colour for what's short. Every colour that carries meaning is nudged toward the text colour until
+ * it reads on the card. The older keys (dim, off, barTop, ...) name the same colours for the 1.3 charts.
  */
 export function derivePalette(t: Tokens): Palette {
   const c = (s: string, fallback: string) => parseColor(s) ?? parseColor(fallback)!
   const fallback = luminance(c(t.inverseText, '#000')) < 0.5 ? DARK : LIGHT
   const k = Object.fromEntries(TOKEN_KEYS.map(key => [key, c(t[key], fallback[key])])) as Record<keyof Tokens, RGB>
   const card = k.userMessageBackground
-  const on = (x: RGB, min: number) => hex(legible(x, card, k.text, min))
+  const look = luminance(card) < 0.5 ? 'dark' : 'light'
+  const d = DESIGN[look], preset = look === 'dark' ? DARK : LIGHT
+  // a token the theme left as its preset has takes the design's ink; one it set is its own
+  const ink = (key: keyof Tokens, design: string, own: RGB = k[key]) => (same(k[key], parseColor(preset[key])!) ? parseColor(design)! : own)
+  const text = ink('text', d.fg)
+  const on = (x: RGB, min: number) => hex(legible(x, card, text, min))
+  const accent = on(ink('claude', d.accent), 3)
+  const bad = on(ink('error', d.bad), 3)
+  const muted = on(ink('inactive', d.muted), 4.5)
+  const tones = TONES[look]
   return {
     card: hex(card),
     veil: hex(k.inverseText),
-    fg: on(k.text, 7),
-    dim: on(k.inactive, 4.5),
-    off: on(k.subtle, 1.8),
-    barTop: on(mix(k.claude, k.warning, 0.35), 2),
-    barBottom: on(k.claude, 2),
-    limit: on(k.suggestion, 3),
-    over: on(k.warning, 3),
-    under: on(k.success, 3),
-    bad: on(k.error, 3),
-    // the models: Claude's own colour for Opus, then hues apart from it and from each other
-    fable: on(mix(k.error, k.suggestion, 0.5), 3),
-    opus: on(k.claude, 3),
-    sonnet: on(k.suggestion, 3),
-    haiku: on(mix(k.success, k.suggestion, 0.35), 3),
+    fg: on(text, 7),
+    dim: muted,
+    off: on(ink('subtle', d.faint), 2.5),
+    barTop: accent,
+    barBottom: accent,
+    limit: on(ink('claude', d.sonnet, mix(k.claude, k.inactive, 0.7)), 3),
+    over: accent,
+    under: accent,
+    bad,
+    surface: hex(card),
+    ...tones,
+    muted,
+    faint: on(ink('subtle', d.faint), 2.5),
+    accent,
+    accentBg: `${accent}2e`,
+    badBg: `${bad}33`,
+    solid: on(ink('inactive', d.solid), 2.5),
+    fable: on(ink('claude', d.fable, mix(k.claude, k.suggestion, 0.5)), 3),
+    opus: accent,
+    sonnet: on(ink('claude', d.sonnet, mix(k.claude, k.inactive, 0.7)), 3),
+    haiku: on(ink('inactive', d.haiku), 3),
   }
+}
+
+/**
+ * The 1.3 chart's colours inside a card's Details, as the design restyles it: its your-pace line in the solid grey, the safe pace in the second model colour, the bars in the accent.
+ */
+export function historyPalettes(p: Palettes): Palettes {
+  const h = (x: Palette): Palette => ({ ...x, fg: x.solid, dim: x.muted, off: x.faint, limit: x.sonnet })
+  return { ...p, dark: h(p.dark), light: h(p.light) }
 }
 
 export function palettesFor(theme: Theme | 'auto'): Palettes {

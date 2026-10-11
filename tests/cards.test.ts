@@ -1,7 +1,10 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
-import { fiveCardSvg, fiveHead, fivePart, hm, partsWidth, projectsSvg, todayText, weekCardSvg, weekHead, weekPart } from '../hooks/cards'
+import {
+  basisRuns, fiveCardSvg, fiveHead, fivePart, fiveRuns, fiveSummary, hm, missRuns, partsWidth,
+  todaySvg, todayRuns, todayText, weekCardSvg, weekHead, weekHeadline, weekLegendSvg, weekPart,
+} from '../hooks/cards'
 import type { WeekPlan } from '../hooks/pace'
 import { DAY, HOUR, MIN, project } from '../hooks/range'
 
@@ -33,11 +36,20 @@ test('the 5-hour part reads in clock times: a cut-off, lasting to the reset, a r
   expect(fivePart(late, at(10, 22), false)).toMatchObject({ value: 'cut off ~00:09', rest: ', resets 00:40' })
   expect(hm(late.resetsAt)).toBe('00:40')
 
-  // the drawing names its frame and marks the cut-off in words
+  // the drawing names its frame, the cut-off's time in red, and marks the cut-off on the line
   const svg = fiveCardSvg(cut, now, 600)
-  expect(svg).toContain('100% = YOUR 5-HOUR LIMIT')
-  expect(svg).toContain('cut off ~17:36')
+  expect(svg).toContain('100% = your 5-hour limit')
+  expect(svg).toContain('<tspan style="fill:var(--bad)" font-weight="600">~17:36 </tspan>')
+  expect(svg).toContain('>cut off ~17:36<')
   expect(svg).not.toMatch(/NaN|Infinity|undefined/)
+  // the figures under the head: what's used and the pace in bold, the time after the cut-off in red
+  expect(fiveRuns(cut, now).map(r => r.s).join('')).toBe(fiveHead(cut, now).sub)
+  expect(fiveRuns(cut, now).at(-1)).toMatchObject({ s: '34m after the cut-off.', fill: 'var(--bad)' })
+  expect(fiveRuns(calm, at(11, 11)).map(r => r.s).join('')).toBe('3% used since 10:40, 9% an hour. About 55% to spare at the reset.')
+  // the Details strip, at 1.3's pace: when it runs out, or what's left
+  expect(fiveSummary(cut).map(r => r.s).join('')).toMatch(/^Runs out in \d+h \d+m · \d+m early$/)
+  expect(fiveSummary(calm).map(r => r.s).join('')).toMatch(/^At the reset \d+% to spare · resets in /)
+  expect(fiveCardSvg(calm, at(11, 11), 600)).toContain('Lasts to the reset at ')
 })
 
 /** A plan at Saturday 11 October 16:00 (a Thursday 11:00 reset), with what the test changes. */
@@ -85,34 +97,40 @@ test('the weekly card: every % names its 100%, and today is in today’s budget'
   // the floor's sentence only while today's use is under the pace
   expect(todayText(plan({ usedToday: 14, today: 14 })).note).toMatch(/^Today’s budget is/)
 
-  const svg = weekCardSvg(plan(), [20, 7], 600)
-  expect(svg).toContain('THIS WEEK · 100% = YOUR WEEKLY LIMIT')
-  expect(svg).toContain('TODAY · 100% = TODAY’S BUDGET')
-  expect(svg).toContain('+55.5% at this pace')
-  expect(svg).toContain('100% · resets Thu 11:00')
-  expect(svg).not.toMatch(/NaN|Infinity|undefined/)
-  // early: no today frame, the days to come unknown
-  const early = weekCardSvg(plan({ basis: 'early', paceDays: 0 }), [20, 7], 600)
-  expect(early).not.toContain('TODAY · 100%')
-  expect(early).toContain('>?<')
-})
+  // the card's own words: the headline with its range apart, the basis and the range in bold
+  expect(weekHeadline(plan({ miss: 12 }))).toEqual({ head: 'About 6% left at the reset', tone: 'good', badge: '±12 pts' })
+  expect(weekHeadline(plan()).badge).toBe(null)
+  expect(basisRuns(plan()).map(r => r.s)).toEqual(['At your pace over the last 7 whole days: ', '13.5% a day.'])
+  expect(missRuns(plan({ miss: 12 }))!.map(r => r.s).join('')).toBe('Typical forecast miss: 12 points. Read this as between 6% short and 18% to spare.')
+  expect(missRuns(plan({ miss: 3 }))!.map(r => r.s).join('')).toBe('Typical forecast miss: 3 points. Read this as 3–9% to spare.')
+  expect(missRuns(plan())).toBe(null)
+  expect(todayRuns(plan()).map(r => r.s).join('')).toBe(d.note)
+  expect(todayRuns(plan()).at(-1)!.s).toBe('14.6% of your weekly limit.')
 
-test('the projects card adds up to the weekly limit, and lists Other’s parts when opened', () => {
-  const sp = {
-    used: 39, rows: [{ name: 'token-range-monitor', pct: 20 }, { name: 'blog', pct: 5 }],
-    other: { chats: 9, devices: 4, before: 1, away: 0 }, otherTotal: 14, unused: 61,
-  }
-  const closed = projectsSvg(sp, 600, false)
-  expect(closed).toContain('This week · 39% used, 61% unused')
-  expect(closed).toContain('>Other ▸<')
-  expect(closed).not.toContain('Desktop chats')
-  const open = projectsSvg(sp, 600, true)
-  expect(open).toContain('Desktop chats')
-  expect(open).toContain('Other devices')
-  expect(open).not.toContain('>Away<')
-  expect(open).toContain('Project names stay on this computer.')
-  // a narrow card leaves the bars out, never the figures
-  expect(projectsSvg(sp, 300, false)).toContain('>20%<')
+  const svg = weekCardSvg(plan({ miss: 12 }), [20, 7], 600)
+  expect(svg).toContain('>This week · 100% = your weekly limit<')
+  expect(svg).toContain('>±12 pts<')
+  expect(svg).toContain('>+55.5% </tspan>')
+  expect(svg).toContain('100% · resets Thu 11:00')
+  // the days: dated, the daily budget outlined over today and the days after (five outlines), or not at all
+  expect(svg).toContain('>Oct 08<')
+  expect(svg).toContain('>~13.5%<')
+  expect(svg.match(/fill="none" style="stroke:var\(--muted\)"/g)?.length).toBe(5)
+  expect(weekCardSvg(plan(), [20, 7], 600, undefined, false)).not.toMatch(/fill="none" style="stroke:var\(--muted\)"/)
+  expect(svg).not.toMatch(/NaN|Infinity|undefined/)
+  // today's frame, on its panel
+  const today = todaySvg(plan(), 600)
+  expect(today).toContain('>Today · 100% = today’s budget<')
+  expect(today).toContain('>Predicted use today<')
+  expect(today).toContain('>92.5%<')
+  expect(today).toContain('100% · day ends 11:00')
+  expect(today).not.toMatch(/NaN|Infinity|undefined/)
+  expect(todaySvg(plan(), 320)).not.toMatch(/NaN|Infinity|undefined/)
+  expect(weekLegendSvg(false).svg).toContain('>Expected at your pace<')
+  // early: the days to come unknown
+  const early = weekCardSvg(plan({ basis: 'early', paceDays: 0 }), [20, 7], 600)
+  expect(early).toContain('>?<')
+  expect(weekLegendSvg(true).svg).toContain('>Not known yet<')
 })
 
 test('a day is short of a week: the reset countdown and day boundaries line up', () => {

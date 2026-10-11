@@ -4,21 +4,19 @@ import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 import type { RangeCheck, RangeDay, RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
-  drawingHeight, emptyChartSvg, emptyChartText, fit, fitHeight, CELL_PX, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
-  bandPart, dur, HOUR, increments, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind, DAY,
+  emptyChartSvg, emptyChartText, fit, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, merge, parseWindow, project, rateText, recordedHours, resetsIn,
+  C, dur, HOUR, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind,
 } from './range'
 import type { Average, LastWindow, Model, TrackSeg, TrackTone } from './range'
-import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
+import { DEFAULT_PALETTES, historyPalettes, palettesFor, resolveTheme } from './theme'
 import { dailyTotals, selfCheck, typicalMiss, weekPlan } from './pace'
 import type { WeekPlan } from './pace'
-import { OTHER_DEVICE, OTHER_INFO, projectName, projectSplit } from './projects'
-import type { OtherPart, ProjectSplit } from './projects'
 import {
-  daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, one, partsWidth, pastDays, projectsSvg, showsToday, todayText,
-  weekBarLabels, weekCardSvg, weekHead, weekPart,
+  daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, fiveSummary, mastheadSvg, oldFigures, one, partsWidth, pastDays,
+  showsToday, todaySvg, todayText, weekBarLabels, weekCardSvg, weekHead, weekLegendSvg, weekPart,
 } from './cards'
-import type { Part } from './cards'
-import { baselineOf, learn, ratio, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
+import type { Run } from './ui'
+import { baselineOf, costWord, learn, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
 import {
   agoText, cancelSignIn, cleanName, configureSync, DEVICE_KEY, DEVICES_FRESH, deleteSynced, deviceLabel, downloadedFor, endSync, GENERIC_NAMES, isDeviceId,
   NAME_KEY, platformOf, refreshDevices, removeDevice, signIn, signOut, startSync, syncTick,
@@ -27,7 +25,7 @@ import type { Lists, Platform, SyncIO } from './sync'
 
 const PANE = 'token-range-monitor'
 /** The mod's version, shown in the pane's title: keep it in step with `.claude-plugin/plugin.json`. */
-const VERSION = '1.4.0'
+const VERSION = '1.4.1'
 const TITLE = `Token Range Monitor ${VERSION}`
 const readings = atom({ plugin: 'token-range-monitor', key: 'readings' } as const, [])
 const settings = atom({ plugin: 'token-range-monitor', key: 'settings' } as const, DEFAULT_SETTINGS)
@@ -39,10 +37,12 @@ const steps = atom({ plugin: 'token-range-monitor', key: 'steps' } as const, [])
 const days = atom({ plugin: 'token-range-monitor', key: 'days' } as const, [] as RangeDay[])
 const check = atom({ plugin: 'token-range-monitor', key: 'check' } as const, [] as RangeCheck[])
 /**
- * How much larger the drawings are shown than they're laid out: everything in them (text, lines, spacing) grows
- * together, one step up from the size they're written in, so nothing in them collides.
+ * How much larger the drawings are shown than they're laid out: 1, so their type is the design's own sizes
+ * (28, 16 and 13 px) at the card's width.
  */
-const ZOOM = 1.125
+const ZOOM = 1
+/** The strip under a card, and what its Details opens: a shade darker than the card, whatever colour the app gives it. */
+const INSET = '#00000017'
 /**
  * A drawing as a plain image: the drawings are made for a frame (a wide canvas, filled to the frame's width), so as
  * an image each gets a viewBox the width it was laid out for, `layout`, shown ZOOM times larger; it scales evenly to
@@ -314,10 +314,13 @@ function syncLine($: EngineInterface, els: Els, v: RangeSync, clockNow: number) 
   if (v.status === 'waiting') return syncPanel($, els, v, clockNow)
   return (
     <Box key="sync" flexDirection="column" marginTop={1}>
-      <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1}>
+      <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={1}>
         {v.status === 'signedIn'
           ? [
-              <Text key="who" color="inactive">{`Synced across devices · last sync ${agoText(v.last, clockNow)}`}</Text>,
+              <Box key="who" flexDirection="row" flexWrap="wrap" columnGap={1}>
+                <Text color="claude">•</Text>
+                <Text color="inactive">{`Synced across devices · last sync ${agoText(v.last, clockNow)}`}</Text>
+              </Box>,
               <Button key="sync-settings" plain dimColor label="⚙ Settings" onPress={() => void openSyncPane($)} />,
             ]
           : [<Button key="sync-enable" plain label="Click here to enable sync between devices" dimColor
@@ -364,8 +367,7 @@ async function loadAll($: EngineInterface) {
   const far = await downloadedFor(syncIO($), account)
   lists.push(...(far.readings as RangeReading[][]))
   spans.push(...far.spans)
-  // another device's responses: their project names stay there, so they count as Other devices here
-  stepLists.push(...(far.steps as RangeStep[][]).map(l => l.map((x): RangeStep => [x[0], x[1], x[2], x[3], x[4], OTHER_DEVICE])))
+  stepLists.push(...(far.steps as RangeStep[][]))
   othersSeen = spans
   othersSteps = mergeSteps(stepLists, now)
   await update($, steps, () => mergeSteps([othersSteps, ownSteps], now))
@@ -416,12 +418,6 @@ async function saveSteps($: EngineInterface, now: number) {
   stepsSavedAt = now
   stepsUnsaved = false
   await $.store.set(stepsKeyOf(ownKey), ownSteps)
-}
-
-/** The project this session works in, from its root folder (see ./projects); read once, the root doesn't move. */
-let sessionProject: string | undefined
-async function projectOf($: EngineInterface): Promise<string> {
-  return (sessionProject ??= projectName(await $.session.root().catch(() => '')))
 }
 
 /**
@@ -522,12 +518,8 @@ async function models($: EngineInterface) {
   // 1.4's weekly projection: the last 7 whole days, today at no less than its expected use
   const totals = dailyTotals(list, watched, now, await read($, days))
   const plan = weekPlan(list, watched, totals, now, typicalMiss(await read($, check)))
-  // this window's use by project, each response weighed as the bars weigh it
-  const split = plan
-    ? projectSplit(increments(list, 'week', watched), stepList, id => weightOf.get(id) ?? usual, plan.resetsAt - 7 * DAY, now, Math.min(100, plan.pct))
-    : null
   return {
-    now, s, weekRecorded, pal, week, plan, totals, split,
+    now, s, weekRecorded, pal, week, plan, totals,
     five: shaped(project(list, 'five', now, fiveAvg, watched)),
     // how each limit's previous window ended, where the record can tell
     lastWeek: lastWindow(list, 'week', now, watched),
@@ -612,7 +604,7 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     const r = yield* next(e)
     try {
-      if (r?.usage) await record($, [await $.clock.now(), r.usage.model || e.model, e.effort === undefined ? '' : String(e.effort), units(r.usage), e.agentId ? 1 : 0, await projectOf($)])
+      if (r?.usage) await record($, [await $.clock.now(), r.usage.model || e.model, e.effort === undefined ? '' : String(e.effort), units(r.usage), e.agentId ? 1 : 0])
     } catch { /* never in the way of the response */ }
     return r
   })
@@ -657,13 +649,13 @@ export const register: Register = (on, options) => {
             ...(i ? [<Text key={`sep-${key}`} dimColor>·</Text>] : []),
             <Box key={`band-${key}`} flexDirection="row">
               <Text dimColor>{p.label} </Text>
-              <Text bold dimColor={p.dim} color={p.dim ? undefined : p.bad ? 'error' : 'success'}>{p.value}</Text>
+              <Text bold dimColor={p.dim} color={p.dim ? undefined : p.bad ? 'error' : 'claude'}>{p.value}</Text>
               {p.rest && <Text dimColor>{p.rest}</Text>}
               {p.tag && <Text key={`tag-${key}`} dimColor>{` ${p.tag}`}</Text>}
             </Box>,
           ]
         })}
-        <Button key="details" label="Details" onPress={() => void openPane($)} />
+        <Button key="details" label="Details ↗" onPress={() => void openPane($)} />
       </Box>
     )
   })
@@ -684,155 +676,31 @@ export const register: Register = (on, options) => {
 
   // B: the side pane
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, steps: stepList, plan, totals, split } = await models($)
+    const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, steps: stepList, plan, totals } = await models($)
     const els = $.ui.resolve(e)
-    const { Box, Text, Button, Link } = els
+    const { Box, Text, Button } = els
     const sync = await read($, syncView)
     // the real time for the sync row's texts: `now` is the drawings', rounded up to the minute
     const clockNow = await $.clock.now()
     // the terminal draws no Svg: there the cards are text
     const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
-    // both cards fit the pane: charts drawn at its width, sharing the height that's left
-    const wide = fit(e.props.bodyColumns)
+    // the drawings are laid out at the card's inner width; the 1.3 charts' heights follow it
+    const size = fit(e.props.bodyColumns)
+    const W = size.width
     const lastOf = (m: Model) => (m.kind === 'week' ? lastWeek : lastFive)
     const open = await read($, details)
-    // drawings are laid out ZOOM times narrower than the card and shown ZOOM times larger
-    const lw = (width: number) => Math.round(width / ZOOM)
-    // the 1.3 charts sit behind Details now, so they take the width's heights and the pane scrolls
-    const size = wide
-    const W = lw(size.width)
-    const cardDrawing = (m: Model) => emptyChartText(m, now) ? emptyChartSvg(m, now, W, pal)
-      : m.kind === 'week' ? weekChart(m, now, W, pal, Math.round(size.weekHeight / ZOOM)) : fiveChart(m, now, W, pal, Math.round(size.fiveHeight / ZOOM))
-    // a card's explanation behind a Details button, a paragraph a line; nothing to say, no button
-    // the button, to sit in a row with whatever else is there, and the text it opens, under that row
-    const detailsButton = (key: string, paragraphs: string[]) => (paragraphs.length
-      ? <Button key={`details-btn-${key}`} plain dimColor label={open.includes(key) ? 'Hide details' : 'Details'}
-          onPress={() => void update($, details, l => (l.includes(key) ? l.filter(k => k !== key) : [...l, key]))} />
-      : null)
-    const detailsText = (key: string, paragraphs: string[]) => (paragraphs.length && open.includes(key)
-      ? <Box key={`details-${key}`} flexDirection="column" gap={Svg ? 1 : 0}>
-          {paragraphs.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
-        </Box>
-      : null)
-    const detailsBlock = (key: string, paragraphs: string[]) => (paragraphs.length
-      ? <Box key={`details-block-${key}`} flexDirection="column" gap={1}>
-          <Box flexDirection="row" justifyContent="flex-end">{detailsButton(key, paragraphs)}</Box>
-          {detailsText(key, paragraphs)}
-        </Box>
-      : null)
+    const toggle = (key: string) => void update($, details, l => (l.includes(key) ? l.filter(k => k !== key) : [...l, key]))
     // the head's figures in words, for a drawing's alt text
     const figuresText = (m: Model) =>
       `At reset ${leftText(m)}, your pace ${m.noData ? 'no data' : rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`
     const lastAlt = (last: LastWindow | null) => (last ? `${LAST_LABEL} ${lastWindowText(last)}. ${lastWindowNote(last)} ` : '')
-
-    // the terminal's rows are few and each one counts: its cards keep the border, but no padding rows, no gaps
     const gap = Svg ? 1 : 0
-    const cardBox = Svg
-      ? { gap: 1, marginBottom: 1, padding: 2 }
-      : { gap: 0, marginBottom: 0, paddingX: 1 }
 
-    // one dark card per limit, as on the car's display: head, chart, controls, then the notes
     // every drawing a plain image, never interactive: the surface loads an interactive drawing (a sandboxed frame)
     // again on every redraw, a scroll's too, and that flashed. A plain function, not a component, each drawing keyed;
     // its height left out, so it follows the drawing's proportions at whatever width it's shown
-    const draw = (key: string, svg: string, alt: string) =>
-      Svg ? <Svg key={key} source={asImage(svg, W)} alt={alt} /> : null
-    // the terminal's range track (see rangeTrack): each piece of text in its tone, at its exact width
-    const TONE: Record<TrackTone, { color?: 'text' | 'subtle' | 'error' | 'success' | 'suggestion'; dimColor?: boolean; bold?: boolean }> = {
-      text: { color: 'text' }, dim: { dimColor: true }, faint: { color: 'subtle' }, short: { color: 'error', bold: true },
-      ok: { color: 'success' }, unused: { color: 'suggestion' }, unusedBold: { color: 'suggestion', bold: true },
-    }
-    const segs = (key: string, list: TrackSeg[]) => list.filter(g => g.text).map((g, i) => (
-      <Box key={`${key}-${i}`} width={[...g.text].length} flexShrink={0}><Text {...TONE[g.tone]}>{g.text.trimEnd()}</Text></Box>
-    ))
-    // the card's inner width: the pane's, less the border and a column of padding each side
-    const trackView = (m: Model) => {
-      const t = rangeTrack(m, e.props.bodyColumns - 4)
-      if (!t) return <Text key={`track-${m.kind}`} dimColor>{m.noData ?? 'No estimate yet.'}</Text>
-      return (
-        <Box key={`track-${m.kind}`} flexDirection="column">
-          <Box flexDirection="row">{segs(`line-${m.kind}`, t.line)}</Box>
-          {t.early && <Box marginLeft={t.early.indent}><Text {...TONE.short}>{t.early.text}</Text></Box>}
-          {t.unused && (
-            <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={1}>
-              <Box flexDirection="row">{segs(`unused-${m.kind}`, t.unused.left)}</Box>
-              <Text {...TONE[t.unused.right.tone]}>{t.unused.right.text}</Text>
-            </Box>
-          )}
-        </Box>
-      )
-    }
-
-    /**
-     * One card: 1.4's part on top (`top`), then a row with the 1.3 comparison (`compare`) and Details, which
-     * opens 1.3's card for this limit: its head, chart, the average's note and controls, and Last window.
-     */
-    const block = (m: Model | null, key: 'week' | 'five', top: Array<JSX.Element | null>, compare: string | null, title: string, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
-      const last = m ? lastOf(m) : null
-      // the terminal has no head drawing, so Details also carries the figures the track leaves out
-      const figures = Svg || !m ? [] : [`${m.kind === 'week' ? 'At week reset' : 'At 5h reset'} ${leftText(m)} · your pace ${m.noData ? 'no data' : rateText(m, m.rate)} · safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`]
-      const info = [...figures, ...(last ? [LAST_INFO, lastWindowNote(last)] : [])]
-      const isOpen = open.includes(key) && !!m
-      return (
-      <Box
-        key={`block-${key}`}
-        flexDirection="column"
-        {...cardBox}
-        borderStyle="round"
-        borderColor="userMessageBackground"
-        backgroundColor="userMessageBackground"
-      >
-        {top}
-        {(compare || m) && (
-          <Box key={`foot-${key}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
-            {compare ? <Text key={`compare-${key}`} color="inactive">{compare}</Text> : <Box />}
-            {m && detailsButton(key, ['1.3'])}
-          </Box>
-        )}
-        {isOpen && m && (Svg ? (
-          <Box key={`old-${key}`} flexDirection="column" gap={1}>
-            {draw(`head-${key}`, headerSvg(m, title, W, pal, resetsIn(m), last),
-              `${title}. ${resetsIn(m)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}${figuresText(m)} ${lastAlt(last)}`)}
-            {chart && draw(`chart-${key}`, chart, `${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`}`)}
-            {(notes.length > 0 || controls) && (
-              <Box key={`old-foot-${key}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
-                <Box flexDirection="column" flexShrink={1}>
-                  {notes.map((note, i) => <Text key={`note-${key}-${i}`} color="inactive">{note}</Text>)}
-                </Box>
-                {controls}
-              </Box>
-            )}
-            {info.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
-          </Box>
-        ) : (
-          <Box key={`old-${key}`} flexDirection="column" marginTop={1}>
-            <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-              <Text bold>{`1.3 · ${title}`}</Text>
-              <Text dimColor>{resetsIn(m)}</Text>
-            </Box>
-            {trackView(m)}
-            {!m.noData && (
-              <Box key={`pace-${key}`} flexDirection="row" flexWrap="wrap">
-                <Text dimColor>Pace </Text>
-                <Text bold color={isShort(m) ? 'error' : undefined}>{rateShort(m, m.rate)}</Text>
-                <Text dimColor> · safe </Text>
-                <Text>{rateShort(m, m.limit)}</Text>
-              </Box>
-            )}
-            {last && (
-              <Box key={`last-${key}`} flexDirection="row" columnGap={1}>
-                <Text dimColor>{LAST_LABEL}</Text>
-                <Text dimColor color={lastIsShort(last) ? 'error' : 'success'}>{lastWindowText(last)}</Text>
-              </Box>
-            )}
-            {notes.map((note, i) => <Text key={`note-${key}-${i}`} color="inactive">{note}</Text>)}
-            {controls}
-            {info.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
-          </Box>
-        ))}
-      </Box>
-      )
-    }
+    const draw = (key: string, svg: string, alt: string, layout = W) =>
+      Svg ? <Svg key={key} source={asImage(svg, layout)} alt={alt} /> : null
 
     // the window selector: native widgets, so hover, focus and clicks are the surface's own
     const unit = s.unit === 'h' ? 'h' : 'd'
@@ -843,80 +711,35 @@ export const register: Register = (on, options) => {
     )
     // until there's enough recorded for a weekly average, there's nothing to choose between: the choices dim and do nothing
     const choicesOff = weekRecorded < MIN_RECORDED_H.week
-    const windowControls = (
-      // a block at the right under the chart: what the average covers, and for a custom window its length beneath
-      <Box flexDirection="column" alignSelf="flex-end" alignItems="flex-start" gap={gap}>
-        <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
-          {seg('mode-reset', 'Since reset', s.mode === 'reset', () => void choose($, { mode: 'reset' }), choicesOff)}
-          {seg('mode-custom', 'Custom', isCustom, () => void setWindow($, n, unit), choicesOff)}
-        </Box>
-        {isCustom && !choicesOff && (
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
-            <Text color="inactive">Last</Text>
-            <Button key="win-dec" label="−" dimColor={n <= UNIT_MIN[unit]} onPress={() => void setWindow($, n - 1, unit)} />
-            <Text bold color="text">{` ${n} `}</Text>
-            <Button key="win-inc" label="+" dimColor={n >= UNIT_MAX[unit]} onPress={() => void setWindow($, n + 1, unit)} />
-            {seg('unit-h', 'hours', unit === 'h', () => void setWindow($, n, 'h'))}
-            {seg('unit-d', 'days', unit === 'd', () => void setWindow($, n, 'd'))}
-          </Box>
-        )}
+    const modeButtons = (
+      <Box key="mode" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
+        {seg('mode-reset', 'Since reset', s.mode === 'reset', () => void choose($, { mode: 'reset' }), choicesOff)}
+        {seg('mode-custom', 'Custom', isCustom, () => void setWindow($, n, unit), choicesOff)}
       </Box>
     )
+    const windowRow = isCustom && !choicesOff ? (
+      <Box key="window" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
+        <Text color="inactive">Last</Text>
+        <Button key="win-dec" label="−" dimColor={n <= UNIT_MIN[unit]} onPress={() => void setWindow($, n - 1, unit)} />
+        <Text bold color="text">{` ${n} `}</Text>
+        <Button key="win-inc" label="+" dimColor={n >= UNIT_MAX[unit]} onPress={() => void setWindow($, n + 1, unit)} />
+        {seg('unit-h', 'hours', unit === 'h', () => void setWindow($, n, 'h'))}
+        {seg('unit-d', 'days', unit === 'd', () => void setWindow($, n, 'd'))}
+      </Box>
+    ) : null
 
     // the models card: each model's cost against the baseline, and this week's points by model and effort
     const base = baselineOf(learned, s.baseline)
     const sp = week ? spend(week, learned, stepList, now) : null
     const shown = learned.models.filter(m => m.shown)
     const names = shortNames(shown)
-    // the models card is compact until its Details is opened: one line, each model's cost against the baseline
     const modelsOpen = open.includes('models')
     const modelsSummary = learned.models.length === 0 ? 'Learning from your responses.'
-      : learned.models.map(m => {
-          const name = names.get(m.id) ?? m.name
-          if (!m.shown) return `${name} learning`
-          if (!base || m === base) return `${name} 1×`
-          return `${name} ${ratio(m, base).x}`
-        }).join(' · ')
-    const modelsCard = (
-      <Box key="block-models" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
-        {Svg ? (
-          // a column like the card's own, so a part left out (no baseline, no spend yet) is simply not there
-          <Box flexDirection="column" gap={1}>
-            {draw('models-head', modelsHead(learned, now, pal).svg, 'Models')}
-            {/* compact: a line of each model's cost, and Details for the full card (rows, compare, this week, what it means) */}
-            <Box key="models-compact" flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
-              <Text key="models-summary" color="inactive">{modelsSummary}</Text>
-              {detailsButton('models', ['full'])}
-            </Box>
-            {modelsOpen && draw('models-costs', modelsCosts(learned, base, W, pal), `Models. ${modelsText(learned, base, null).join(' ')}`)}
-            {modelsOpen && base && (
-              <Box flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={1} rowGap={1}>
-                <Text color="inactive">Compare with</Text>
-                {shown.map(m => seg(`base-${m.id}`, names.get(m.id) ?? m.name, m === base, () => void choose($, { baseline: m.id })))}
-              </Box>
-            )}
-            {modelsOpen && sp && draw('models-spend', modelsSpend(sp, W, pal), modelsText({ ...learned, models: [] }, null, sp).join(' '))}
-            {modelsOpen && <Text key="models-info" dimColor>{MODELS_INFO}</Text>}
-          </Box>
-        ) : (
-          // compact as on the desktop: the name and the summary on one line, the rest behind Details
-          <Box flexDirection="column">
-            <Box key="models-compact" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-              <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-                <Text bold>Models</Text>
-                <Text key="models-summary" color="inactive">{modelsSummary}</Text>
-              </Box>
-              {detailsButton('models', ['full'])}
-            </Box>
-            {modelsOpen && modelsText(learned, base, sp).map((line, i) => <Text key={`models-line-${i}`} dimColor>{line}</Text>)}
-            {modelsOpen && base && (
-              <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-                <Text color="inactive">Compare with</Text>
-                {shown.map(m => seg(`base-${m.id}`, names.get(m.id) ?? m.name, m === base, () => void choose($, { baseline: m.id })))}
-              </Box>
-            )}
-          </Box>
-        )}
+      : learned.models.map(m => `${names.get(m.id) ?? m.name} ${costWord(m, base)}`).join(' · ')
+    const compareRow = base && (
+      <Box key="compare" flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={1} rowGap={gap}>
+        <Text color="inactive">Compare with</Text>
+        {shown.map(m => seg(`base-${m.id}`, names.get(m.id) ?? m.name, m === base, () => void choose($, { baseline: m.id })))}
       </Box>
     )
 
@@ -933,14 +756,205 @@ export const register: Register = (on, options) => {
       )
     }
 
-    // ---- 1.4's parts ----
-    const toneColor = (tone: 'good' | 'bad' | 'dim') => (tone === 'good' ? 'success' : tone === 'bad' ? 'error' : undefined)
-    // the weekly card: the week's frame, then today's; on the terminal the same figures as text
-    const weekTop = (p: WeekPlan): Array<JSX.Element | null> => {
+
+    if (Svg) {
+      // ---- the desktop: the design's cards, each a drawing with the pane's own controls in it ----
+      const runsText = (key: string, runs: Run[]) => (
+        <Box key={key} flexDirection="row" flexWrap="wrap" flexShrink={1}>
+          {runs.map((r, i) => (
+            <Text key={`${key}-${i}`} color={r.fill === C.bad ? 'error' : r.fill === C.accent ? 'claude' : 'inactive'}>{r.s}</Text>
+          ))}
+        </Box>
+      )
+      /**
+       * One card: its drawing and controls on the card, then the strip under it (what it says while closed, and
+       * Details), then what Details opens, on the strip's tone.
+       */
+      const card = (key: string, body: Array<JSX.Element | null | false | undefined>, strip?: { summary: JSX.Element; detailsKey: string; inner: () => Array<JSX.Element | null | false | undefined> }) => {
+        const isOpen = !!strip && open.includes(strip.detailsKey)
+        return (
+          <Box key={`block-${key}`} flexDirection="column" marginBottom={1} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
+            <Box key={`inner-${key}`} flexDirection="column" paddingX={2} paddingY={1} gap={1}>{body}</Box>
+            {strip && (
+              <Box key={`strip-${key}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} paddingX={2} paddingY={1} backgroundColor={INSET}>
+                {strip.summary}
+                <Button key={`details-btn-${strip.detailsKey}`} plain dimColor={!isOpen} label={isOpen ? 'Hide details ▴' : 'Details ▾'} onPress={() => toggle(strip.detailsKey)} />
+              </Box>
+            )}
+            {strip && isOpen && (
+              <Box key={`details-${key}`} flexDirection="column" paddingX={2} paddingBottom={1} gap={1} backgroundColor={INSET}>{strip.inner()}</Box>
+            )}
+          </Box>
+        )
+      }
+      // 1.3's card for a limit, behind its Details: its figures, its chart, what the average covers, Last window
+      const oldInner = (m: Model, title: string, controls: JSX.Element | null, extra: JSX.Element | null) => {
+        const last = lastOf(m)
+        const empty = emptyChartText(m, now)
+        const chart = empty ? emptyChartSvg(m, now, W, historyPalettes(pal))
+          : m.kind === 'week' ? weekChart(m, now, W, historyPalettes(pal), size.weekHeight) : fiveChart(m, now, W, historyPalettes(pal), size.fiveHeight)
+        return [
+          draw(`head-${m.kind}`, oldFigures(m, last, W, pal),
+            `${title}. ${resetsIn(m)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}${figuresText(m)} ${lastAlt(last)}`),
+          draw(`chart-${m.kind}`, chart, empty ? empty.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`),
+          <Box key={`old-foot-${m.kind}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
+            <Text key={`note-${m.kind}`} color="inactive">{empty ? '' : m.kind === 'five' ? `${averageNote(m)} ${resetsIn(m)}.` : averageNote(m)}</Text>
+            {controls}
+          </Box>,
+          extra,
+          ...(last ? [LAST_INFO, lastWindowNote(last)] : []).map((para, i) => <Text key={`details-${m.kind}-${i}`} dimColor>{para}</Text>),
+        ]
+      }
+
+      const showBudget = !s.hideBudget
+      const weekCard = plan && week ? (() => {
+        const past = pastDays(plan, totals), hd = weekHead(plan), L = weekBarLabels(plan), d = todayText(plan)
+        const alt = `This week, 100% = your weekly limit. ${hd.head}. ${hd.sub} ${plan.noData ? '' : `${[L.used, L.add].filter(Boolean).join(', ')}. ${daysText(plan, past)}.`}`
+        const chart = !plan.noData && plan.pct < 100
+        const legend = weekLegendSvg(plan.basis === 'early', pal)
+        return card('week', [
+          draw('week-card', weekCardSvg(plan, past, W, pal, showBudget), alt),
+          chart && (
+            <Box key="week-legend-row" flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2}>
+              {draw('week-legend', legend.svg, plan.basis === 'early' ? 'Solid: used. Outlined: not known yet.' : 'Solid: used. Striped: expected at your pace.', legend.width)}
+              {plan.basis !== 'early' && (
+                <Button key="budget-toggle" plain dimColor label={`${showBudget ? '☑' : '☐'} Show daily budget`} onPress={() => void choose($, { hideBudget: showBudget })} />
+              )}
+            </Box>
+          ),
+          showsToday(plan) && draw('week-today', todaySvg(plan, W, pal), `Today, 100% = today's budget. ${d.predicted}. ${d.note}`),
+        ], {
+          detailsKey: 'week',
+          summary: <Text key="summary-week" color="inactive">Usage chart, pace & last window</Text>,
+          inner: () => oldInner(week, 'This week', modeButtons, windowRow),
+        })
+      })() : <Text key="no-week" dimColor>No weekly limit reported.</Text>
+
+      const fiveCard = five ? card('five', [
+        draw('five-card', fiveCardSvg(five, now, W, pal), (() => { const hd = fiveHead(five, now); return `5-hour window, 100% = your 5-hour limit. ${hd.head}. ${hd.sub}` })()),
+      ], {
+        detailsKey: 'five',
+        summary: runsText('summary-five', fiveSummary(five)),
+        inner: () => oldInner(five, '5-hour window', null, null),
+      }) : <Text key="no-five" dimColor>No active 5-hour window.</Text>
+
+      const modelsCard = card('models', [
+        draw('models-head', modelsHead(learned, base, now, W, pal), `Models, ${learned.since === null ? 'learning' : 'learned from your usage'}: ${modelsSummary}`),
+      ], {
+        detailsKey: 'models',
+        summary: <Text key="summary-models" color="inactive">Relative token cost & weekly usage</Text>,
+        inner: () => [
+          draw('models-costs', modelsCosts(learned, base, W, pal), `Models. ${modelsText(learned, base, null).join(' ')}`),
+          compareRow,
+          sp && draw('models-spend', modelsSpend(sp, W, pal), modelsText({ ...learned, models: [] }, null, sp).join(' ')),
+          <Text key="models-info" dimColor>{MODELS_INFO}</Text>,
+        ],
+      })
+
+      // "Expand all details": every card's Details at once, or all closed again
+      const ALL = ['week', 'five', 'models']
+      const allOpen = ['week', 'five', 'models'].every(k => open.includes(k))
+      return (
+        <Box key="cards" flexDirection="column" gap={1}>
+          {draw('masthead', mastheadSvg(W, pal), 'Token Range Monitor. Track your usage, limits, and the time you have left. This week.')}
+          <Box key="toolbar" flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2}>
+            <Text color="inactive">• Usage overview</Text>
+            <Button key="expand-all" plain dimColor label={allOpen ? 'Collapse details' : 'Expand all details'}
+              onPress={() => void update($, details, () => (allOpen ? [] : ALL))} />
+          </Box>
+          <Box key="pane" flexDirection="column">
+            {weekCard}
+            {fiveCard}
+            {modelsCard}
+            {syncRow(sync)}
+          </Box>
+        </Box>
+      )
+    }
+
+    // ---- the terminal: the same figures as text, each card compact ----
+    const cardBox = { gap: 0, marginBottom: 0, paddingX: 1 }
+    // the terminal's range track (see rangeTrack): each piece of text in its tone, at its exact width
+    const TONE: Record<TrackTone, { color?: 'text' | 'subtle' | 'error' | 'success' | 'suggestion'; dimColor?: boolean; bold?: boolean }> = {
+      text: { color: 'text' }, dim: { dimColor: true }, faint: { color: 'subtle' }, short: { color: 'error', bold: true },
+      ok: { color: 'success' }, unused: { color: 'suggestion' }, unusedBold: { color: 'suggestion', bold: true },
+    }
+    const segs = (key: string, list: TrackSeg[]) => list.filter(g => g.text).map((g, i) => (
+      <Box key={`${key}-${i}`} width={[...g.text].length} flexShrink={0}><Text {...TONE[g.tone]}>{g.text.trimEnd()}</Text></Box>
+    ))
+    // the card's inner width: the pane's, less the border and a column of padding each side
+    const trackView = (m: Model) => {
+      const tr = rangeTrack(m, e.props.bodyColumns - 4)
+      if (!tr) return <Text key={`track-${m.kind}`} dimColor>{m.noData ?? 'No estimate yet.'}</Text>
+      return (
+        <Box key={`track-${m.kind}`} flexDirection="column">
+          <Box flexDirection="row">{segs(`line-${m.kind}`, tr.line)}</Box>
+          {tr.early && <Box marginLeft={tr.early.indent}><Text {...TONE.short}>{tr.early.text}</Text></Box>}
+          {tr.unused && (
+            <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={1}>
+              <Box flexDirection="row">{segs(`unused-${m.kind}`, tr.unused.left)}</Box>
+              <Text {...TONE[tr.unused.right.tone]}>{tr.unused.right.text}</Text>
+            </Box>
+          )}
+        </Box>
+      )
+    }
+    const detailsButton = (key: string) => (
+      <Button key={`details-btn-${key}`} plain dimColor label={open.includes(key) ? 'Hide details' : 'Details'} onPress={() => toggle(key)} />
+    )
+
+    /**
+     * One card: 1.4's part on top (`top`), then Details, which opens the older card for this limit: its head,
+     * track, the average's note and controls, and Last window.
+     */
+    const block = (m: Model | null, key: 'week' | 'five', top: JSX.Element[], title: string, controls: JSX.Element | null, notes: string[]) => {
+      const last = m ? lastOf(m) : null
+      // the terminal has no head drawing, so Details also carries the figures the track leaves out
+      const figures = !m ? [] : [`${m.kind === 'week' ? 'At week reset' : 'At 5h reset'} ${leftText(m)} · your pace ${m.noData ? 'no data' : rateText(m, m.rate)} · safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`]
+      const info = [...figures, ...(last ? [LAST_INFO, lastWindowNote(last)] : [])]
+      const isOpen = open.includes(key) && !!m
+      return (
+        <Box key={`block-${key}`} flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
+          {top}
+          {m && (
+            <Box key={`foot-${key}`} flexDirection="row" justifyContent="flex-end">
+              {detailsButton(key)}
+            </Box>
+          )}
+          {isOpen && m && (
+            <Box key={`old-${key}`} flexDirection="column" marginTop={1}>
+              <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+                <Text bold>{title}</Text>
+                <Text dimColor>{resetsIn(m)}</Text>
+              </Box>
+              {trackView(m)}
+              {!m.noData && (
+                <Box key={`pace-${key}`} flexDirection="row" flexWrap="wrap">
+                  <Text dimColor>Pace </Text>
+                  <Text bold color={isShort(m) ? 'error' : undefined}>{rateShort(m, m.rate)}</Text>
+                  <Text dimColor> · safe </Text>
+                  <Text>{rateShort(m, m.limit)}</Text>
+                </Box>
+              )}
+              {last && (
+                <Box key={`last-${key}`} flexDirection="row" columnGap={1}>
+                  <Text dimColor>{LAST_LABEL}</Text>
+                  <Text dimColor color={lastIsShort(last) ? 'error' : 'claude'}>{lastWindowText(last)}</Text>
+                </Box>
+              )}
+              {notes.map((note, i) => <Text key={`note-${key}-${i}`} color="inactive">{note}</Text>)}
+              {controls}
+              {info.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
+            </Box>
+          )}
+        </Box>
+      )
+    }
+
+    const toneColor = (tone: 'good' | 'bad' | 'dim') => (tone === 'good' ? 'claude' : tone === 'bad' ? 'error' : undefined)
+    // the weekly card: the week's frame, then today's
+    const weekTop = (p: WeekPlan): JSX.Element[] => {
       const past = pastDays(p, totals), hd = weekHead(p), L = weekBarLabels(p), d = todayText(p)
-      const alt = `This week, 100% = your weekly limit. ${hd.head}. ${hd.sub} ${p.noData ? '' : `${[L.used, L.add].filter(Boolean).join(', ')}. ${daysText(p, past)}.`}`
-        + (showsToday(p) ? ` Today, 100% = today's budget. ${d.predicted}. ${d.note}` : '')
-      if (Svg) return [draw('week-card', weekCardSvg(p, past, W, pal), alt)]
       return [
         <Box key="week-title" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
           <Text bold>This week</Text>
@@ -967,10 +981,9 @@ export const register: Register = (on, options) => {
         ] : []),
       ]
     }
-    // the 5-hour card: clock times, and the line from its opening to its reset
-    const fiveTop = (m: Model): Array<JSX.Element | null> => {
+    // the 5-hour card: clock times
+    const fiveTop = (m: Model): JSX.Element[] => {
       const hd = fiveHead(m, now)
-      if (Svg) return [draw('five-card', fiveCardSvg(m, now, W, pal), `5-hour window, 100% = your 5-hour limit. ${hd.head}. ${hd.sub}`)]
       return [
         <Box key="five-title" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
           <Text bold>5-hour window</Text>
@@ -981,51 +994,34 @@ export const register: Register = (on, options) => {
         <Text key="five-sub" dimColor>{hd.sub}</Text>,
       ]
     }
-    // what 1.3 would show, for this release only, so the change can be compared
-    const compare13 = (m: Model) => { const b = bandPart(m, false); return `1.3 shows: Week ${b.value}${b.rest}` }
-    // the projects card: this week's use by project, Other's parts under it when opened
-    const otherOpen = open.includes('other')
-    const projectsCard = (sp: ProjectSplit) => (
-      <Box key="block-projects" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
-        {Svg
-          ? draw('projects', projectsSvg(sp, W, otherOpen, pal), `Projects, this week in % of your weekly limit: ${sp.rows.map(r => `${r.name} ${one(r.pct)}%`).concat(`Other ${one(sp.otherTotal)}%`, `Unused ${one(sp.unused)}%`).join(', ')}.`)
-          : (
-            <Box flexDirection="column">
-              <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-                <Text bold>Projects</Text>
-                <Text dimColor>{`This week · ${one(sp.used)}% used, ${one(sp.unused)}% unused`}</Text>
-              </Box>
-              {[...sp.rows.map(r => ({ key: `p-${r.name}`, name: r.name, v: r.pct, dim: false })), { key: 'p-other', name: `Other ${otherOpen ? '▾' : '▸'}`, v: sp.otherTotal, dim: false },
-                ...(otherOpen ? (['chats', 'devices', 'before', 'away'] as OtherPart[]).filter(k => sp.other[k] > 0).map(k => ({ key: `p-other-${k}`, name: `  ${OTHER_INFO[k].label}`, v: sp.other[k], dim: true })) : []),
-                { key: 'p-unused', name: 'Unused', v: sp.unused, dim: true }, { key: 'p-total', name: 'Weekly limit', v: 100, dim: false }].map(r => (
-                <Box key={r.key} flexDirection="row" justifyContent="space-between" columnGap={2}>
-                  <Text dimColor={r.dim} bold={r.key === 'p-total'}>{r.name}</Text>
-                  <Text dimColor={r.dim} bold={r.key === 'p-total'}>{`${one(r.v)}%`}</Text>
-                </Box>
-              ))}
-              {otherOpen && (['chats', 'devices', 'before', 'away'] as OtherPart[]).filter(k => sp.other[k] > 0).map(k => (
-                <Text key={`p-info-${k}`} dimColor>{`${OTHER_INFO[k].label}: ${OTHER_INFO[k].text}`}</Text>
-              ))}
-              <Text dimColor>Project names stay on this computer.</Text>
-            </Box>
-          )}
-        <Box key="projects-foot" flexDirection="row" justifyContent="flex-end">
-          <Button key="other-toggle" plain dimColor label={otherOpen ? 'Hide what Other counts' : 'What Other counts'}
-            onPress={() => void update($, details, l => (l.includes('other') ? l.filter(k => k !== 'other') : [...l, 'other']))} />
+    // the models card: the name and the summary on one line, the rest behind Details
+    const modelsCard = (
+      <Box key="block-models" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
+        <Box key="models-compact" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+          <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+            <Text bold>Models</Text>
+            <Text key="models-summary" color="inactive">{modelsSummary}</Text>
+          </Box>
+          {detailsButton('models')}
         </Box>
+        {modelsOpen && modelsText(learned, base, sp).map((line, i) => <Text key={`models-line-${i}`} dimColor>{line}</Text>)}
+        {modelsOpen && compareRow}
+      </Box>
+    )
+    const windowControls = (
+      <Box key="controls" flexDirection="column" alignItems="flex-start">
+        {modeButtons}
+        {windowRow}
       </Box>
     )
 
     return (
       <Box key="cards" flexDirection="column">
         {plan && week
-          ? block(week, 'week', weekTop(plan), compare13(week), 'This week', Svg ? cardDrawing(week) : null, windowControls, [
-            ...(Svg && emptyChartText(week, now) ? [] : [averageNote(week)]),
-          ])
+          ? block(week, 'week', weekTop(plan), 'This week', windowControls, [averageNote(week)])
           : <Text dimColor>No weekly limit reported.</Text>}
-        {split && plan && !plan.noData && projectsCard(split)}
         {five
-          ? block(five, 'five', fiveTop(five), null, '5-hour window', Svg ? cardDrawing(five) : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
+          ? block(five, 'five', fiveTop(five), '5-hour window', null, [averageNote(five)])
           : <Text dimColor>No active 5-hour window.</Text>}
         {modelsCard}
         {syncRow(sync)}

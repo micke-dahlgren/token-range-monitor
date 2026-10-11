@@ -59,14 +59,30 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   })
   expect(await pane.find({ type: 'Svg' })).toBeDefined()
   // the weekly card: the week's frame and today's, each saying what its 100% is
-  const weekAlt = async () => String((await pane.find({ type: 'Svg' }))?.props.alt)
+  const weekAlt = async () => (await pane.findAll({ type: 'Svg' })).map(x => String(x.props.alt)).filter(a => a.startsWith('This week, ') || a.startsWith('Today, ')).join(' ')
   expect(await weekAlt()).toMatch(/^This week, 100% = your weekly limit\. About \d+% left at the reset\./)
   expect(await weekAlt()).toMatch(/Today, 100% = today's budget\. Predicted use today: [\d.]+% of daily budget\./)
-  // and 1.3's figure beside it, for comparing
-  expect(await pane.find({ type: 'Text', text: /^1\.3 shows: Week runs out in / })).toBeDefined()
+  // no comparison with the previous release
+  expect(await pane.find({ type: 'Text', text: /^1\.3 shows/ })).toBeUndefined()
+  // the daily budget's outlines switch off and on, and the switch says which
+  const weekSource = async () => String((await pane.findAll({ type: 'Svg' })).find(x => String(x.props.alt).startsWith('This week, '))?.props.source)
+  expect(await weekSource()).toMatch(/fill="none" style="stroke:var\(--muted\)"/)
+  await pane.press({ key: 'budget-toggle' })
+  expect((await pane.find({ key: 'budget-toggle' }))?.props.label).toBe('☐ Show daily budget')
+  expect(await weekSource()).not.toMatch(/fill="none" style="stroke:var\(--muted\)"/)
+  await pane.press({ key: 'budget-toggle' })
+  expect((await pane.find({ key: 'budget-toggle' }))?.props.label).toBe('☑ Show daily budget')
+  // "Expand all details" opens every card's Details and Other at once; again, closes them
+  await pane.press({ key: 'expand-all' })
+  for (const k of ['week', 'five', 'models']) expect((await pane.find({ key: `details-btn-${k}` }))?.props.label).toBe('Hide details ▴')
+  expect((await pane.find({ key: 'other-toggle' }))?.props.label).toBe('▾ Other')
+  expect((await pane.find({ key: 'expand-all' }))?.props.label).toBe('Collapse details')
+  await pane.press({ key: 'expand-all' })
+  for (const k of ['week', 'five', 'models']) expect((await pane.find({ key: `details-btn-${k}` }))?.props.label).toBe('Details ▾')
+  expect((await pane.find({ key: 'other-toggle' }))?.props.label).toBe('▸ Other')
   // the models card follows the two limits' cards, still learning with no responses seen
   // compact until its Details opens: a summary line, then the full card
-  expect(await pane.find({ type: 'Text', text: /^Learning from your responses.$|learning|×/ })).toBeDefined()
+  expect((await pane.findAll({ type: 'Svg' })).some(x => /^Models, learning: Learning from your responses.$/.test(String(x.props.alt)))).toBe(true)
   expect((await pane.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('Models.'))).toBe(false)
   await pane.press({ key: 'details-btn-models' })
   expect((await pane.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('Models.'))).toBe(true)
@@ -124,10 +140,10 @@ test('the band and the pane draw on the desktop', async ($, on) => {
     for (const x of all) {
       expect(x.props.isInteractive).toBeFalsy()
       expect(x.props.height).toBeUndefined()
-      // shown one step larger than laid out: the size is the viewBox's times 1.125, both ways
+      // shown at the size laid out: the design's type sizes, scaling evenly with the card's width
       const [, w, h, vw, vh] = /^<svg [^>]*width="(\d+)" height="(\d+)" viewBox="0 0 (\d+) (\d+)"/.exec(String(x.props.source))!.map(Number)
-      expect(Math.abs(w! / vw! - 1.125)).toBeLessThan(0.01)
-      expect(Math.abs(h! / vh! - 1.125)).toBeLessThan(0.02)
+      expect(w).toBe(vw)
+      expect(h).toBe(vh)
       expect(String(x.props.source)).not.toContain('class="info"')
       // every text placed: no empty coordinates, no number gone wrong
       expect(String(x.props.source)).not.toMatch(/ [xy]=""|NaN|Infinity|undefined/)
@@ -182,7 +198,7 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
   for (const src of sources) expect(src).not.toContain('class="info"')
   // what Last window means, under it
   expect(await desk.find({ type: 'Text', text: /^It ended at 72% used\.$/ })).toBeDefined()
-  expect((await desk.find({ type: 'Button', key: 'details-btn-five' }))?.props.label).toBe('Hide details')
+  expect((await desk.find({ type: 'Button', key: 'details-btn-five' }))?.props.label).toBe('Hide details ▴')
   await desk.unmount()
 
   // the terminal: 1.4's figures as text, each frame named

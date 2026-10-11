@@ -109,7 +109,7 @@ export function joinSpans(spans: readonly RangeWatch[]): RangeWatch[] {
  * The record's lists packed into one list per UTC day, repeats dropped:
  * readings and steps by their time, watched spans split at midnight. Only the
  * days wholly inside KEEP, so a day's list never shrinks as its start ages out.
- * Steps go without their project: project names never leave the computer.
+ * Steps go as their first 5 elements: a project name 1.4.0 recorded never leaves the computer.
  */
 export function packDays(lists: Lists, now: number): Map<string, DayData> {
   const days = new Map<string, DayData>()
@@ -225,7 +225,7 @@ export function backoffMs(failures: number, retryAfterMs = 0): number {
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 /**
  * A downloaded list's data, its items checked one by one (another device may run another version); null when it is no day list.
- * Steps are cut to their first 5 elements, so another device's list never brings a project name in.
+ * Steps are cut to their first 5 elements, so another device's list never brings anything more in.
  */
 export function unpack(data: unknown): DayData | null {
   if (!Array.isArray(data) || data.length < 3 || !data.slice(0, 3).every(Array.isArray)) return null

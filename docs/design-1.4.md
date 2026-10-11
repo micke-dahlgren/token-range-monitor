@@ -47,12 +47,14 @@ The only bridge between them is one sentence giving today's budget in week terms
    - **Predicted use today: 92.5% of daily budget** (red over 100%).
    - A bar from 0 to 100% of today's budget (it can run past 100%): solid up to what's used (82%), striped up to the prediction (92.5%), and a marker at 100% labelled "day ends 11:00".
    - One small sentence: "Until the day ends, today counts as at least one day at your pace, 92.5% of the budget. Today's budget is what's left of the week divided by the days left: 14.6% of your weekly limit." The first part shows only while today's use is under the pace.
-5. A dim line, "1.3 shows: …", for the first release only, so the change can be compared.
+5. A dim line, "1.3 shows: …", for the first release only, so the change can be compared. (Removed after 1.4.0.)
 6. **Details** holds the 1.3 chart, Last window and the explanations.
 
 The 5-hour card is labelled the same way: "100% = your 5-hour limit".
 
 ### The projects card (new)
+
+> Removed after 1.4.0: the projects card and project tagging were taken out.
 
 - **Header:** "This week · 39% used, 61% unused", with a thin stacked bar of the split.
 - **Rows:** one per project, in % of the weekly limit, largest first, all in one neutral colour.
@@ -135,6 +137,8 @@ With no whole day on record, the headline is 1.3's hourly figure tagged `early`,
 `now + (100 − used) ÷ pace`, with the pace since the window opened, as now. It's shown in local clock time. Anything past the reset shows as "lasts to the reset".
 
 ### Projects
+
+> Removed after 1.4.0: the projects card and project tagging were taken out.
 
 - **Tagging:** each recorded response (`RangeStep`) gets a 6th element, the project, from `$.session.root()`:
   - the folder's base name;
