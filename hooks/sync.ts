@@ -109,6 +109,7 @@ export function joinSpans(spans: readonly RangeWatch[]): RangeWatch[] {
  * The record's lists packed into one list per UTC day, repeats dropped:
  * readings and steps by their time, watched spans split at midnight. Only the
  * days wholly inside KEEP, so a day's list never shrinks as its start ages out.
+ * Steps go without their project: project names never leave the computer.
  */
 export function packDays(lists: Lists, now: number): Map<string, DayData> {
   const days = new Map<string, DayData>()
@@ -136,7 +137,8 @@ export function packDays(lists: Lists, now: number): Map<string, DayData> {
       const id = `${s[0]}:${s[1]}:${s[3]}`
       if (seenS.has(id)) continue
       seenS.add(id)
-      dayFor(s[0])?.[2].push(s)
+      // project names stay on this computer
+      dayFor(s[0])?.[2].push(s.slice(0, 5) as RangeStep)
     }
   }
   for (const [, d] of days) {
@@ -221,14 +223,18 @@ export function backoffMs(failures: number, retryAfterMs = 0): number {
 }
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
-/** A downloaded list's data, its items checked one by one (another device may run another version); null when it is no day list. */
+/**
+ * A downloaded list's data, its items checked one by one (another device may run another version); null when it is no day list.
+ * Steps are cut to their first 5 elements, so another device's list never brings a project name in.
+ */
 export function unpack(data: unknown): DayData | null {
   if (!Array.isArray(data) || data.length < 3 || !data.slice(0, 3).every(Array.isArray)) return null
   const [r, w, s] = data as unknown[][]
   return [
     r!.filter((x): x is RangeReading => Array.isArray(x) && isNum(x[0]) && (x[1] === 0 || x[1] === 1) && isNum(x[2]) && isNum(x[3])),
     w!.filter((x): x is RangeWatch => Array.isArray(x) && isNum(x[0]) && isNum(x[1])),
-    s!.filter((x): x is RangeStep => Array.isArray(x) && isNum(x[0]) && typeof x[1] === 'string' && typeof x[2] === 'string' && isNum(x[3]) && (x[4] === 0 || x[4] === 1)),
+    s!.filter((x): x is RangeStep => Array.isArray(x) && isNum(x[0]) && typeof x[1] === 'string' && typeof x[2] === 'string' && isNum(x[3]) && (x[4] === 0 || x[4] === 1))
+      .map(x => x.slice(0, 5) as RangeStep),
   ]
 }
 

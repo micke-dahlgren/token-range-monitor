@@ -61,6 +61,16 @@ test('packing: every local list in one list per day, repeats dropped, midnight r
   expect(back.steps.flat()).toEqual([step1, step2])
 })
 
+test('project names never leave the computer, and never come in from another', async () => {
+  const step: RangeStep = [MIDNIGHT + MIN, 'claude-opus-5-5', 'high', 100, 0, 'secret-project']
+  const days = packDays({ readings: [], spans: [], steps: [[step]] }, NOW)
+  expect(JSON.stringify([...days])).not.toContain('secret-project')
+  expect(days.get('20261010')![2]).toEqual([[MIDNIGHT + MIN, 'claude-opus-5-5', 'high', 100, 0]])
+  // the local step is left as it was
+  expect(step[5]).toBe('secret-project')
+  expect(unpack([[], [], [[1, 'm', 'e', 3, 0, 'elsewhere']]])).toEqual([[], [], [[1, 'm', 'e', 3, 0]]])
+})
+
 test('a day too big for one list goes on in parts', async () => {
   const steps: RangeStep[] = Array.from({ length: 400 }, (_, i) => [MIDNIGHT + i * 1000, 'claude-sonnet-5', 'medium', i, 0])
   const days = new Map([['20261010', [[[MIDNIGHT, 1, 3, reset]], [], steps] as [RangeReading[], RangeWatch[], RangeStep[]]]])

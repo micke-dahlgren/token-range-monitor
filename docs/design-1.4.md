@@ -1,6 +1,6 @@
 # Token Range Monitor 1.4: design plan
 
-Status: agreed in review (drafts 1–4 of the review page). Nothing here is built yet.
+Status: agreed in review (drafts 1–4 of the review page), built in 1.4.0.
 
 ## Why a new version
 
@@ -163,15 +163,16 @@ One row, with this breakdown in the pane and in the README:
 | What | Change | Migration |
 |---|---|---|
 | `RangeStep` | optional 6th element `project?: string` | old steps count as "Before 1.4" |
-| daily totals (new) | one `[dayStart, %]` per day for 8 weeks, local store, synced like readings | built from readings on first run |
+| daily totals (new) | one `[dayStart, %]` per day for 8 weeks, local store, rebuilt from the merged readings (synced ones included) | built from readings on first run |
 | self-check (new) | per window: the projection at each day boundary and the final outcome, last 4 windows | starts empty; no range until one window completes |
 | sync | strip `project` in `packDays` | none |
 
 ## Code layout
 
-- **`hooks/pace.ts` (new):** `dayIndex`, `dailyTotals`, `pace`, `weekdayProfile`, `project14` (the projection), `dailyBudget`, `selfCheck`. Pure functions, with tests.
+- **`hooks/pace.ts` (new):** `dayIndex`, `dailyTotals`, `pace`, `activeThreshold`, `weekdayProfile`, `weekPlan` (the projection, daily budget and predicted use), `selfCheck`, `typicalMiss`. Pure functions, with tests.
+- **`hooks/cards.ts` (new):** the line above the prompt (`weekPart`, `fivePart`), the cards' words, and their drawings (`weekCardSvg`, `projectsSvg`, `fiveCardSvg`).
 - **`hooks/projects.ts` (new):** `projectName(root)`, `projectSplit(...)`, the Other breakdown.
-- **`hooks/range.ts`:** `bandPart` keeps its shape and reads the new projection; 5-hour clock-time text.
+- **`hooks/range.ts`:** unchanged; 1.3's projection stays for the Details chart and the comparison line.
 - **`hooks/register.tsx`:**
   - record the project in `turn.step`;
   - keep the daily totals and the self-check;

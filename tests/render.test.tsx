@@ -36,8 +36,11 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   })
   // the countdown is plain text: no unit to switch
   expect(await band.find({ key: 'reset-week' })).toBeUndefined()
-  expect(await band.find({ type: 'Text', text: /^runs out in \d/ })).toBeDefined()
-  expect(await band.find({ type: 'Text', text: /^, \S.* early$/ })).toBeDefined()
+  // 1.4: the week at the last whole days' pace, the 5-hour cut-off as a clock time
+  expect(await band.find({ type: 'Text', text: /^\d+% to spare$/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^, resets in \d/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^cut off ~\d\d:\d\d$/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^, resets \d\d:\d\d$/ })).toBeDefined()
   await band.unmount()
 
   // a narrow column: the short form, still one line
@@ -45,8 +48,9 @@ test('the band and the pane draw on the desktop', async ($, on) => {
     plugin: 'token-range-monitor', surface: 'desktop', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 40 } as never,
   })
-  expect(await thin.find({ type: 'Text', text: /^out in \d/ })).toBeDefined()
-  expect(await thin.find({ type: 'Text', text: /^runs out in / })).toBeUndefined()
+  expect(await thin.find({ type: 'Text', text: /^\+\d+%$/ })).toBeDefined()
+  expect(await thin.find({ type: 'Text', text: /^out \d\d:\d\d$/ })).toBeDefined()
+  expect(await thin.find({ type: 'Text', text: /^cut off / })).toBeUndefined()
   await thin.unmount()
 
   const pane = await $.ui.mount({
@@ -54,6 +58,12 @@ test('the band and the pane draw on the desktop', async ($, on) => {
     props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 60, placement: 'dock' } as never,
   })
   expect(await pane.find({ type: 'Svg' })).toBeDefined()
+  // the weekly card: the week's frame and today's, each saying what its 100% is
+  const weekAlt = async () => String((await pane.find({ type: 'Svg' }))?.props.alt)
+  expect(await weekAlt()).toMatch(/^This week, 100% = your weekly limit\. About \d+% left at the reset\./)
+  expect(await weekAlt()).toMatch(/Today, 100% = today's budget\. Predicted use today: [\d.]+% of daily budget\./)
+  // and 1.3's figure beside it, for comparing
+  expect(await pane.find({ type: 'Text', text: /^1\.3 shows: Week runs out in / })).toBeDefined()
   // the models card follows the two limits' cards, still learning with no responses seen
   // compact until its Details opens: a summary line, then the full card
   expect(await pane.find({ type: 'Text', text: /^Learning from your responses.$|learning|×/ })).toBeDefined()
@@ -61,7 +71,11 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   await pane.press({ key: 'details-btn-models' })
   expect((await pane.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('Models.'))).toBe(true)
   await pane.press({ key: 'details-btn-models' })
-  expect(String((await pane.find({ type: 'Svg' }))?.props.alt)).toMatch(/Runs out in /)
+  // 1.3's card is behind the weekly card's Details: its head, chart and controls
+  const oldHead = async () => (await pane.findAll({ type: 'Svg' })).map(x => String(x.props.alt)).find(a => a.startsWith('This week.'))
+  expect(await oldHead()).toBeUndefined()
+  await pane.press({ key: 'details-btn-week' })
+  expect(await oldHead()).toMatch(/Runs out in /)
   // the selector is native widgets: press the buttons, type into the field
   // the note is text, beside the controls
   const note = async () => (await pane.find({ type: 'Text', text: /^Average (over the last|since)/ }))?.children?.join('') as string | undefined
@@ -73,7 +87,7 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   await press('mode-custom')
   for (let i = 0; i < 6; i++) await press('win-inc')
   expect(await note()).toBe('Average over the last 7d.')
-  expect(String((await pane.find({ type: 'Svg' }))?.props.alt)).toMatch(/Runs out in /)
+  expect(await oldHead()).toMatch(/Runs out in /)
 
   // switching to hours keeps the count
   await press('unit-h')
@@ -115,21 +129,18 @@ test('the band and the pane draw on the desktop', async ($, on) => {
       expect(Math.abs(w! / vw! - 1.125)).toBeLessThan(0.01)
       expect(Math.abs(h! / vh! - 1.125)).toBeLessThan(0.02)
       expect(String(x.props.source)).not.toContain('class="info"')
-      // every text placed: no empty coordinates
-      expect(String(x.props.source)).not.toMatch(/ [xy]=""/)
+      // every text placed: no empty coordinates, no number gone wrong
+      expect(String(x.props.source)).not.toMatch(/ [xy]=""|NaN|Infinity|undefined/)
     }
     // the weekly drawing (head and chart, with its plot) by its height
     return all.filter(x => String(x.props.source).includes('id="plot"')).map(x => Number(/^<svg [^>]* height="(\d+)"/.exec(String(x.props.source))![1]))
   }
-  // the charts fill the pane's height: a tall pane grows them to their most, never beyond
-  const tall = await charts(160, 300)
-  expect(tall[0]).toBe(440)
-  expect((await charts(160, 600))[0]).toBe(440)
-  // a shorter pane shrinks them to fit, down to their least, below which the pane scrolls
-  const mid = await charts(160, 50), short = await charts(160, 30), tiny = await charts(160, 10)
-  expect(mid[0]!).toBeLessThan(tall[0]!)
-  expect(short[0]!).toBeLessThanOrEqual(mid[0]!)
-  expect(tiny[0]).toBe(200)
+  // the charts sit behind Details, so their height follows the card's width alone: a wide card, their most
+  const wideChart = await charts(160, 300)
+  expect(Math.abs(wideChart[0]! - 440)).toBeLessThan(2)
+  expect((await charts(160, 10))[0]).toBe(wideChart[0])
+  // a narrow one, their least
+  expect(Math.abs((await charts(40, 300))[0]! - 260)).toBeLessThan(2)
 })
 
 test('both cards show the last window, on the desktop and in the terminal', async ($, on) => {
@@ -157,22 +168,29 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
 
   // the desktop: drawn in each card's head, with its info circle and tooltip
   const desk = await $.ui.mount({ plugin: 'token-range-monitor', surface: 'desktop', ...PANE })
+  // 1.3's head, with Last window, is behind each card's Details
+  expect((await desk.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('This week.'))).toBe(false)
+  for (const k of ['week', 'five', 'models']) expect(await desk.find({ type: 'Button', key: `details-btn-${k}` })).toBeDefined()
+  expect(await desk.find({ type: 'Text', text: /^It ended at 72% used\.$/ })).toBeUndefined()
+  await desk.press({ key: 'details-btn-five' })
+  await desk.press({ key: 'details-btn-week' })
   const alts = (await desk.findAll({ type: 'Svg' })).map(x => String(x.props.alt))
   expect(alts.some(a => a.startsWith('This week.') && a.includes('Last window 17% short. It ran out 1d before its reset, after 6d of use.'))).toBe(true)
   expect(alts.some(a => a.startsWith('5-hour window.') && a.includes('Last window 28% to spare. It ended at 72% used.'))).toBe(true)
   const sources = (await desk.findAll({ type: 'Svg' })).map(x => String(x.props.source)).filter(src => src.includes('>Last window<'))
   expect(sources.length).toBe(2)
   for (const src of sources) expect(src).not.toContain('class="info"')
-  // what Last window means: behind a Details button on each card, opened by a press
-  for (const k of ['week', 'five', 'models']) expect(await desk.find({ type: 'Button', key: `details-btn-${k}` })).toBeDefined()
-  expect(await desk.find({ type: 'Text', text: /^It ended at 72% used\.$/ })).toBeUndefined()
-  await desk.press({ key: 'details-btn-five' })
+  // what Last window means, under it
   expect(await desk.find({ type: 'Text', text: /^It ended at 72% used\.$/ })).toBeDefined()
   expect((await desk.find({ type: 'Button', key: 'details-btn-five' }))?.props.label).toBe('Hide details')
   await desk.unmount()
 
-  // the terminal: a dim line under the figures
+  // the terminal: 1.4's figures as text, each frame named
   const term = await $.ui.mount({ plugin: 'token-range-monitor', surface: 'terminal', ...PANE })
+  expect(await term.find({ type: 'Text', text: 'This week · 100% = your weekly limit' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^Predicted use today: [\d.]+% of daily budget$/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: '100% = your 5-hour limit' })).toBeDefined()
+  // 1.3's card, Last window a dim line under its figures, still open from the desktop's Details
   expect((await term.findAll({ type: 'Text', text: /^Last window$/ })).length).toBe(2)
   expect(await term.find({ type: 'Text', text: '28% to spare' })).toBeDefined()
   expect(await term.find({ type: 'Text', text: '17% short' })).toBeDefined()
@@ -188,10 +206,10 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
   expect(await term.find({ type: 'Text', text: '╳' })).toBeDefined()
   expect(await term.find({ type: 'Text', text: /^\S.* early$/ })).toBeDefined()
   expect(await term.find({ type: 'Text', text: /^\d+\.\d%\/day$/ })).toBeDefined()
-  // the figures the track leaves out are behind the card's Details
-  expect(await term.find({ type: 'Text', text: /^At week reset / })).toBeUndefined()
-  await term.press({ key: 'details-btn-week' })
+  // the figures the track leaves out are behind the card's Details too
   expect(await term.find({ type: 'Text', text: /^At week reset / })).toBeDefined()
+  await term.press({ key: 'details-btn-week' })
+  expect(await term.find({ type: 'Text', text: /^At week reset / })).toBeUndefined()
   // the models card is one line until its Details opens
   expect(await term.find({ type: 'Text', text: /^This week \d+% used/ })).toBeUndefined()
   await term.press({ key: 'details-btn-models' })

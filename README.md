@@ -28,44 +28,77 @@ claude plugin update token-range-monitor
 
 **Above the prompt**, one line:
 
-> Week **runs out in 2d 9h**, 1d 7h early · 5h **21% to spare**, resets in 2h 24m · Details
+> Week **6% to spare**, resets in 4d 13h · 5h **cut off ~00:09**, resets 00:40 · Details
 
-- For a limit you'll make it to the reset on, it shows what's projected to be left when it resets, at your current pace, in green: **21% to spare**.
-- For a limit you won't, it shows in red when you'd run out, counted from now, and how long before the reset that is.
-- In a narrow terminal it shortens to stay on one line: `Week out in 2d 9h · 5h +21% 2h 24m · Details`.
+- **Week:** what's projected to be left at the weekly reset, in green: **6% to spare**. If you won't make it, it says in red when you'd run out and how long before the reset: **runs out Wed ~12:45**, 22h early.
+- **±N** follows the figure when the projection has typically missed by more than 5 points: `Week 9% to spare ±12`.
+- **early** follows it until a whole day is on record (just after you install). Until then it's the older hourly estimate.
+- **5h:** in clock times. **cut off ~00:09** in red if you'd hit the 5-hour limit before it resets, or **55% to spare** in green, then when it resets.
+- In a narrow terminal it shortens to stay on one line: `Week +6% 4d 13h · 5h out 00:09 · Details`.
 - **Details** opens the pane.
 
-**The pane** has one card per limit, showing:
+**The pane** has a card per limit, a projects card and a models card. Every % on them says what its 100% is, and a figure never mixes the week with the day.
 
-- **At reset** (what's projected to be left, "21% to spare" or "23% short"), **Your pace** (your average usage rate) and **Safe pace** (the highest rate you can keep up until the reset without running out). When you're over, it also says when you'd run out.
-- In the terminal, where there's no chart, the window is drawn as a line at your pace, with the reset marked `┤`. If you'd run out, the line stops at `╳` with how early under it. If it lasts, the line runs on past the reset in blue, as far as your pace would carry you, with what's left unused under it. The two paces follow in short, and the card's **Details** has the rest.
-- **Last window**, small and dim beside them: how the previous window of that limit ended, in the same terms as At reset. **28% to spare** means it reset with 28% unused. **Short** means it ran out early, and is how much more you'd have needed for the time you were locked out, at the pace you'd used it until then. It only shows when the record covers that window's end.
-- A chart of your usage over the averaging window, ending at *Now*. The dotted line is your pace and the solid line is the safe pace. If the dotted line is above the solid one, you'll run out before the reset.
-- Bars are usage seen as it happened. Anthropic reports each limit in whole percents, so each rise is shared among the responses made since the previous one, by their size. That way the bars follow your actual work and don't all come out one percent high. Stretches the plugin didn't see (before it was installed, or while no session here was getting responses) show as one low block labelled with what's known, like "12% used while away, 9h".
-- For the weekly limit, a choice of what the average covers:
-  - **Since reset** (the default): your usage since the weekly reset, from Anthropic's own figure. It needs no recorded history, so it works right after you install.
-  - **Custom:** the last 1–24 hours or 1–7 days.
+**This week** (100% = your weekly limit):
 
-A third card, **Models**, shows what each model costs and where your week went:
+- The head: "About 6% left at the reset", or "Runs out Wed ~12:45, 22h before the reset", and what that's based on: "At your pace over the last 7 whole days: 13.5% a day".
+- The whole week as one bar: what's used, solid, and what your pace adds before the reset, striped.
+- The days of this window side by side, each in % of your weekly limit: past days and today solid, later days striped at your pace. Today and the days after it are outlined at the **daily budget**, the most you can use each day and still reach the reset. Today turns red once it passes the budget.
+
+**Today** (100% = today's budget), on the same card:
+
+- **Predicted use today: 92.5% of daily budget**, red over 100%.
+- A bar of today's use against its budget, and when the day ends.
+- One sentence gives today's budget in week terms: what's left of the week divided by the days left, "14.6% of your weekly limit".
+
+Under the card, a dim line says what 1.3 would have shown, so the change can be compared. The card's **Details** opens the older view: the chart of your usage, the choice of what its average covers (**Since reset**, or a custom 1–24 hours or 1–7 days), and **Last window**, how the previous window ended.
+
+**Projects** splits this week's use by the project you worked in, in % of your weekly limit, largest first, plus **Other** and **Unused**, so the column adds up to 100%. It answers "did my side project eat my week?" at a glance. **What Other counts** lists Other's parts:
+
+- **Desktop chats:** conversations in the desktop app's chat, which run in a temporary folder rather than a project.
+- **Other devices:** responses synced from your other computers. Their project names stay there.
+- **Before 1.4:** responses recorded before projects were tracked.
+- **Away:** usage with no responses seen: claude.ai in a browser, the phone app, or a device without the plugin.
+
+A project is the folder a session runs in, by its name. A git worktree under `<repo>/.claude/worktrees/` counts as its repository. Project names stay on this computer: sync never sends them.
+
+**5-hour window** (100% = your 5-hour limit): "Cut off ~17:36 at this pace", or "Lasts to the reset at 15:40", and a line from the window's opening to its reset, with now and the cut-off marked.
+
+**Models** shows what each model costs and where your week went:
 
 - **Cost** compares each model token for token with a baseline you pick under **Compare with** (Sonnet by default). "Opus 4.7×" means the same tokens on Opus use 4.7 times as much of your limit as on Sonnet, whether it's a quick answer or a long agentic run. The likely range is shown beneath.
 - **This week** splits the % of your weekly limit by model and effort level. Higher effort means more thinking tokens, so it shows here, not in the cost. Usage the plugin didn't see stays apart as **Not recorded**.
 
-Open the pane with `/token-range`. You can also set the window from the prompt: `/token-range 2d`, `/token-range 12h` or `/token-range reset`.
+In the terminal, where there are no drawings, each card shows the same figures as text.
+
+Open the pane with `/token-range`. You can also set the Details chart's window from the prompt: `/token-range 2d`, `/token-range 12h` or `/token-range reset`.
 
 ## How the estimate works
 
-Each limit's percentage and reset time arrive with Claude's responses. The mod records them and works out your usage rate over the chosen window:
+Each limit's percentage and reset time arrive with Claude's responses, and the mod records them.
 
-- **Projected left at reset** = 100% − (used now + rate × time until reset)
-- **Safe pace** = what's left ÷ time until reset
+**Days.** A day is 24 hours from the weekly reset's time of day, so days line up with the week. A day's use is how far the weekly figure rose in it, usage from elsewhere included.
 
-The mod shows **No data** rather than a misleading number when there isn't enough behind the average:
+**The weekly projection:**
 
-- **A custom window needs that much recorded history.** A 2-day average needs 2 days of readings.
-- **Weekly estimates need at least 6 hours of data.** The weekly percentage moves in steps of about a point, so over a short stretch a single step reads as a huge rate.
-- **Since reset waits 6 hours after each weekly reset.**
-- **The 5-hour estimate averages since the window opened,** from Anthropic's own figure, and its chart shows the whole window. It starts 15 minutes after the window opens.
+- **Pace** = the average of your last 7 whole days, across weekly resets. Seven days always include a weekend, so it counts at its real weight.
+- **Today** counts as at least one day at your pace, or more once you've used more.
+- **Left at reset** = 100% − (used now + the rest of today + your pace for each whole day left).
+- If that's below zero, you run out on the day the running total passes 100%.
+
+So the figure only moves when you use Claude beyond today's expected use, or when a day ends. Idle hours, a night's sleep or a quiet evening don't swing it. A low day joins the 7-day pace once it ends.
+
+**Your weekly rhythm.** Once 14 days are on record, each day left counts at what you usually use on that weekday: the median of that weekday's days. A weekday you're never active on counts as 0, so a weekend you never work adds nothing. A day is active when it uses at least a quarter of your median day with any use, which scales the same on Pro and Max.
+
+**Daily budget** = what was left at the start of today ÷ the days left in the window, today included. It changes only when a day ends.
+
+**Self-check.** At each day boundary the mod notes what it projected. When the window resets it compares those with what was actually left. When the typical miss over the last 4 windows is more than 5 points, the figure shows `±` that miss.
+
+**Just after you install,** until a whole day is on record, the weekly figure is the older estimate (used so far ÷ hours since the reset, kept up to the reset), tagged **early**. It needs 6 hours after the reset; before that it shows **No data**.
+
+**The 5-hour cut-off** = now + what's left ÷ your rate since the window opened, shown as a clock time. If that's past the reset, it lasts.
+
+**The Details chart** keeps the older averages: **Since reset** (the default) needs no history, and a custom window needs that much recorded history. Weekly averages need at least 6 hours of data, because the weekly percentage moves in steps of about a point.
 
 ### Model costs
 
@@ -81,7 +114,7 @@ If you use Claude Code on more than one computer, each one only sees the usage i
 
 While signed in, each device uploads what it recorded every 10 minutes (only when something changed) and when a session ends, and downloads what the other devices uploaded. Synced data is kept per Claude account, as the local record is, so switching Claude accounts switches the synced record too. If the server can't be reached, the mod carries on with what it has and tries again later; a short note on the row says so.
 
-**What's sent:** the usage-limit percentages and reset times Claude reports, the times your sessions were getting responses, and for each response its time, model, effort level and token counts. Never your prompts, Claude's replies, code, file names or anything else from your sessions. Your Claude account and organization ids are sent so lists from different Claude accounts stay apart; the server stores only a keyed hash of them. Signing in also sends this computer's name, which the server keeps to list your devices. Your email comes from the Google or GitHub sign-in.
+**What's sent:** the usage-limit percentages and reset times Claude reports, the times your sessions were getting responses, and for each response its time, model, effort level and token counts. Never your prompts, Claude's replies, code, file names, project names or anything else from your sessions. Your Claude account and organization ids are sent so lists from different Claude accounts stay apart; the server stores only a keyed hash of them. Signing in also sends this computer's name, which the server keeps to list your devices. Your email comes from the Google or GitHub sign-in.
 
 **Where:** a small server on Cloudflare (Workers and D1) at `https://token-range-monitor.micke-dahlgren.workers.dev`. Its privacy policy is at [token-range-monitor.micke-dahlgren.workers.dev/privacy](https://token-range-monitor.micke-dahlgren.workers.dev/privacy).
 
@@ -98,7 +131,7 @@ While signed in, each device uploads what it recorded every 10 minutes (only whe
 ## Good to know
 
 - **Pro and Max subscriptions only.** API-key usage has no subscription limits to show.
-- **History starts when you install it.** Readings are recorded while a Claude Code session is open, and every session on this computer shares them. Usage on claude.ai, or on another device unless you [sync](#sync-across-devices), shows up as a jump at the next reading. The record keeps the last 15 days.
+- **History starts when you install it.** Readings are recorded while a Claude Code session is open, and every session on this computer shares them. Usage on claude.ai, or on another device unless you [sync](#sync-across-devices), shows up as a jump at the next reading. The record keeps the last 15 days, and each day's total use for 8 weeks.
 - **It keeps one history per account.** Limits belong to the signed-in account and organization, so signing in to another account switches to that account's own history.
 - **Your data stays on your computer** unless you sign in to [sync](#sync-across-devices). It's kept in the mod's own storage in your Claude Code configuration folder. The drawings load the IBM Plex fonts from Google Fonts, and use your system's font where they can't.
 - **Built on Claude Code's early-access mod API.** A Claude Code update may change that API and break the mod before it's updated.

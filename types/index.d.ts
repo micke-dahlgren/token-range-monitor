@@ -4,11 +4,18 @@ export type RangeReading = [t: number, kind: 0 | 1, pct: number, resetsAt: numbe
 /** A stretch of time a session on this computer was open and taking readings: [from, to] in ms. */
 export type RangeWatch = [from: number, to: number]
 
+/** One day's use, a day being 24 hours from the weekly reset's time of day: when it began (ms), and how far the weekly figure rose in it, in % of the weekly limit. */
+export type RangeDay = [dayStart: number, pct: number]
+
+/** One weekly window's self-check: when it resets (ms), what the projection said was left at each day boundary in it, and what was actually left once it reset. */
+export type RangeCheck = { resetsAt: number; at: Array<[t: number, left: number]>; actual?: number }
+
 /**
  * One model response seen here, subagents' included: when, the model's id, the effort it was asked for
- * ('' for none), its tokens weighted by that model's price ratios, and 1 when a subagent made it.
+ * ('' for none), its tokens weighted by that model's price ratios, 1 when a subagent made it, and the project
+ * the response was made in (see hooks/projects.ts; absent for responses recorded before 1.4). The project is never synced.
  */
-export type RangeStep = [t: number, model: string, effort: string, units: number, sub: 0 | 1]
+export type RangeStep = [t: number, model: string, effort: string, units: number, sub: 0 | 1, project?: string]
 
 /**
  * What the weekly average covers (a window of n units, or since the reset), whether reset countdowns show
@@ -53,6 +60,6 @@ export type RangeDevice = { id: string; name: string | null; lastSeenAt?: number
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-range-monitor': { readings: RangeReading[]; seen: RangeWatch[]; steps: RangeStep[]; settings: RangeSettings; tick: number; palettes: Palettes; sync: RangeSync; details: string[] }
+    'token-range-monitor': { readings: RangeReading[]; seen: RangeWatch[]; steps: RangeStep[]; days: RangeDay[]; check: RangeCheck[]; settings: RangeSettings; tick: number; palettes: Palettes; sync: RangeSync; details: string[] }
   }
 }

@@ -1,14 +1,23 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } from '../types'
+import type { RangeCheck, RangeDay, RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   drawingHeight, emptyChartSvg, emptyChartText, fit, fitHeight, CELL_PX, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, headerSvg, merge, parseWindow, project, rateText, recordedHours, resetsIn,
-  bandPart, bandWidth, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind,
+  bandPart, dur, HOUR, increments, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind, DAY,
 } from './range'
 import type { Average, LastWindow, Model, TrackSeg, TrackTone } from './range'
 import { DEFAULT_PALETTES, palettesFor, resolveTheme } from './theme'
+import { dailyTotals, selfCheck, typicalMiss, weekPlan } from './pace'
+import type { WeekPlan } from './pace'
+import { OTHER_DEVICE, OTHER_INFO, projectName, projectSplit } from './projects'
+import type { OtherPart, ProjectSplit } from './projects'
+import {
+  daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, one, partsWidth, pastDays, projectsSvg, showsToday, todayText,
+  weekBarLabels, weekCardSvg, weekHead, weekPart,
+} from './cards'
+import type { Part } from './cards'
 import { baselineOf, learn, ratio, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
 import {
   agoText, cancelSignIn, cleanName, configureSync, DEVICE_KEY, DEVICES_FRESH, deleteSynced, deviceLabel, downloadedFor, endSync, GENERIC_NAMES, isDeviceId,
@@ -18,7 +27,7 @@ import type { Lists, Platform, SyncIO } from './sync'
 
 const PANE = 'token-range-monitor'
 /** The mod's version, shown in the pane's title: keep it in step with `.claude-plugin/plugin.json`. */
-const VERSION = '1.3.2'
+const VERSION = '1.4.0'
 const TITLE = `Token Range Monitor ${VERSION}`
 const readings = atom({ plugin: 'token-range-monitor', key: 'readings' } as const, [])
 const settings = atom({ plugin: 'token-range-monitor', key: 'settings' } as const, DEFAULT_SETTINGS)
@@ -26,6 +35,9 @@ const tick = atom({ plugin: 'token-range-monitor', key: 'tick' } as const, 0)
 const seen = atom({ plugin: 'token-range-monitor', key: 'seen' } as const, [])
 const palettes = atom({ plugin: 'token-range-monitor', key: 'palettes' } as const, DEFAULT_PALETTES)
 const steps = atom({ plugin: 'token-range-monitor', key: 'steps' } as const, [])
+/** Each whole day's use, kept 8 weeks, and the weekly projection's self-check (see ./pace). */
+const days = atom({ plugin: 'token-range-monitor', key: 'days' } as const, [] as RangeDay[])
+const check = atom({ plugin: 'token-range-monitor', key: 'check' } as const, [] as RangeCheck[])
 /**
  * How much larger the drawings are shown than they're laid out: everything in them (text, lines, spacing) grows
  * together, one step up from the size they're written in, so nothing in them collides.
@@ -352,7 +364,8 @@ async function loadAll($: EngineInterface) {
   const far = await downloadedFor(syncIO($), account)
   lists.push(...(far.readings as RangeReading[][]))
   spans.push(...far.spans)
-  stepLists.push(...(far.steps as RangeStep[][]))
+  // another device's responses: their project names stay there, so they count as Other devices here
+  stepLists.push(...(far.steps as RangeStep[][]).map(l => l.map((x): RangeStep => [x[0], x[1], x[2], x[3], x[4], OTHER_DEVICE])))
   othersSeen = spans
   othersSteps = mergeSteps(stepLists, now)
   await update($, steps, () => mergeSteps([othersSteps, ownSteps], now))
@@ -403,6 +416,33 @@ async function saveSteps($: EngineInterface, now: number) {
   stepsSavedAt = now
   stepsUnsaved = false
   await $.store.set(stepsKeyOf(ownKey), ownSteps)
+}
+
+/** The project this session works in, from its root folder (see ./projects); read once, the root doesn't move. */
+let sessionProject: string | undefined
+async function projectOf($: EngineInterface): Promise<string> {
+  return (sessionProject ??= projectName(await $.session.root().catch(() => '')))
+}
+
+/**
+ * Keeps the daily totals and the self-check under the account (`<account>/days`, `<account>/check`): the
+ * readings are kept 15 days, so the weekday profile's 8 weeks and the last 4 windows' self-check are kept
+ * here, each built from the merged readings, the other devices' included. Saved only when they change.
+ */
+const daysKey = () => `${account}/days`
+const checkKey = () => `${account}/check`
+async function keepDays($: EngineInterface) {
+  const now = await $.clock.now()
+  const list = await read($, readings), watched = await read($, seen)
+  const totals = dailyTotals(list, watched, now, ((await $.store.get(daysKey())) ?? []) as RangeDay[])
+  const before = ((await $.store.get(checkKey())) ?? []) as RangeCheck[]
+  const next = selfCheck(before, list, watched, totals, now)
+  if (JSON.stringify(totals) !== JSON.stringify(await read($, days))) {
+    await $.store.set(daysKey(), totals)
+    await update($, days, () => totals)
+  }
+  if (JSON.stringify(next) !== JSON.stringify(before)) await $.store.set(checkKey(), next)
+  if (JSON.stringify(next) !== JSON.stringify(await read($, check))) await update($, check, () => next)
 }
 
 async function capture($: EngineInterface, limits: readonly SessionRateLimit[]) {
@@ -479,8 +519,15 @@ async function models($: EngineInterface) {
   const work = stepList.map(st => [st[0], st[3] * (weightOf.get(st[1]) ?? usual)] as const)
   const shaped = (m: Model | null) => (m ? { ...m, increments: refine(m.increments, work) } : null)
   const week = shaped(projected)
+  // 1.4's weekly projection: the last 7 whole days, today at no less than its expected use
+  const totals = dailyTotals(list, watched, now, await read($, days))
+  const plan = weekPlan(list, watched, totals, now, typicalMiss(await read($, check)))
+  // this window's use by project, each response weighed as the bars weigh it
+  const split = plan
+    ? projectSplit(increments(list, 'week', watched), stepList, id => weightOf.get(id) ?? usual, plan.resetsAt - 7 * DAY, now, Math.min(100, plan.pct))
+    : null
   return {
-    now, s, weekRecorded, pal, week,
+    now, s, weekRecorded, pal, week, plan, totals, split,
     five: shaped(project(list, 'five', now, fiveAvg, watched)),
     // how each limit's previous window ended, where the record can tell
     lastWeek: lastWindow(list, 'week', now, watched),
@@ -519,6 +566,7 @@ export const register: Register = (on, options) => {
     // a theme that can't be read leaves the card's default colours, never the rest of the start
     await loadTheme($).catch(() => undefined)
     await capture($, (await $.session.usage()).rateLimits)
+    await keepDays($).catch(() => undefined)
     // the first sync waits for the session to be under way: nothing on the network holds up its start
     $.clock.after(1_000, () => void syncTick(syncIO($), true))
     // once a minute: pick up other sessions' readings and move "now" along; sync when it's due
@@ -528,6 +576,7 @@ export const register: Register = (on, options) => {
       await loadAll($)
       await loadTheme($).catch(() => undefined)   // picks up a theme file edited in place
       await capture($, (await $.session.usage()).rateLimits)
+      await keepDays($).catch(() => undefined)
       await update($, tick, n => n + 1)
       // another account's record syncs at once
       await syncTick(syncIO($), moved)
@@ -563,7 +612,7 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     const r = yield* next(e)
     try {
-      if (r?.usage) await record($, [await $.clock.now(), r.usage.model || e.model, e.effort === undefined ? '' : String(e.effort), units(r.usage), e.agentId ? 1 : 0])
+      if (r?.usage) await record($, [await $.clock.now(), r.usage.model || e.model, e.effort === undefined ? '' : String(e.effort), units(r.usage), e.agentId ? 1 : 0, await projectOf($)])
     } catch { /* never in the way of the response */ }
     return r
   })
@@ -592,22 +641,25 @@ export const register: Register = (on, options) => {
   // C: one line above the prompt
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const { week, five } = await models($)
-    if (!week && !five) return next(e)
+    const { plan, five, now } = await models($)
+    if (!plan && !five) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const limits = [week, five].filter((m): m is Model => !!m)
+    const partsOf = (short: boolean) => [
+      ...(plan ? [{ key: 'week', part: weekPart(plan, short) }] : []),
+      ...(five ? [{ key: 'five', part: fivePart(five, now, short) }] : []),
+    ]
     // the full line where it fits, else the short one, so the band stays one line in a narrow column
-    const short = bandWidth(limits, false) > e.props.bodyColumns
+    const short = partsWidth(partsOf(false).map(x => x.part)) > e.props.bodyColumns
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center">
-        {limits.flatMap((m, i) => {
-          const p = bandPart(m, short)
+        {partsOf(short).flatMap(({ key, part: p }, i) => {
           return [
-            ...(i ? [<Text key={`sep-${m.kind}`} dimColor>·</Text>] : []),
-            <Box key={`band-${m.kind}`} flexDirection="row">
+            ...(i ? [<Text key={`sep-${key}`} dimColor>·</Text>] : []),
+            <Box key={`band-${key}`} flexDirection="row">
               <Text dimColor>{p.label} </Text>
-              <Text bold dimColor={!!m.noData} color={m.noData ? undefined : m.over ? 'error' : 'success'}>{p.value}</Text>
+              <Text bold dimColor={p.dim} color={p.dim ? undefined : p.bad ? 'error' : 'success'}>{p.value}</Text>
               {p.rest && <Text dimColor>{p.rest}</Text>}
+              {p.tag && <Text key={`tag-${key}`} dimColor>{` ${p.tag}`}</Text>}
             </Box>,
           ]
         })}
@@ -632,7 +684,7 @@ export const register: Register = (on, options) => {
 
   // B: the side pane
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, steps: stepList } = await models($)
+    const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, steps: stepList, plan, totals, split } = await models($)
     const els = $.ui.resolve(e)
     const { Box, Text, Button, Link } = els
     const sync = await read($, syncView)
@@ -643,25 +695,11 @@ export const register: Register = (on, options) => {
     // both cards fit the pane: charts drawn at its width, sharing the height that's left
     const wide = fit(e.props.bodyColumns)
     const lastOf = (m: Model) => (m.kind === 'week' ? lastWeek : lastFive)
-    // the charts take what's left of the pane's height once everything else is placed, so it all fits without
-    // scrolling where it can. The other drawings are measured; the native parts (padding, gaps, buttons, the sync
-    // rows) are counted in rows, a row CELL_PX.h pixels: an estimate, so a little may still scroll
     const open = await read($, details)
     // drawings are laid out ZOOM times narrower than the card and shown ZOOM times larger
     const lw = (width: number) => Math.round(width / ZOOM)
-    const others = ZOOM * [
-      ...[week, five].filter((m): m is Model => !!m).flatMap(m => [
-        headerSvg(m, m.kind === 'week' ? 'This week' : '5-hour window', lw(wide.width), pal, resetsIn(m), lastOf(m)),
-      ]),
-      modelsHead(learned, now, pal).svg,
-      // the full models card only while its Details is open
-      ...(open.includes('models') ? [modelsCosts(learned, baselineOf(learned, s.baseline), lw(wide.width), pal)] : []),
-      ...(open.includes('models') && week ? (() => { const sp0 = spend(week, learned, stepList, now); return sp0 ? [modelsSpend(sp0, lw(wide.width), pal)] : [] })() : []),
-    ].reduce((a, svg) => a + drawingHeight(svg), 0)
-    // the cards' padding, gaps and button rows, the models line, the sync line; an open Details adds its text
-    const nativeRows = 20 + ['week', 'five', 'models'].filter(k => open.includes(k)).length * 5
-    const rows = e.props.scroll?.bodyRows
-    const size = Svg && rows ? fitHeight(wide, rows * CELL_PX.h - others - nativeRows * CELL_PX.h) : wide
+    // the 1.3 charts sit behind Details now, so they take the width's heights and the pane scrolls
+    const size = wide
     const W = lw(size.width)
     const cardDrawing = (m: Model) => emptyChartText(m, now) ? emptyChartSvg(m, now, W, pal)
       : m.kind === 'week' ? weekChart(m, now, W, pal, Math.round(size.weekHeight / ZOOM)) : fiveChart(m, now, W, pal, Math.round(size.fiveHeight / ZOOM))
@@ -725,78 +763,73 @@ export const register: Register = (on, options) => {
       )
     }
 
-    const block = (title: string, m: Model, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
-      const last = lastOf(m)
+    /**
+     * One card: 1.4's part on top (`top`), then a row with the 1.3 comparison (`compare`) and Details, which
+     * opens 1.3's card for this limit: its head, chart, the average's note and controls, and Last window.
+     */
+    const block = (m: Model | null, key: 'week' | 'five', top: Array<JSX.Element | null>, compare: string | null, title: string, chart: string | null, controls: JSX.Element | null, notes: string[]) => {
+      const last = m ? lastOf(m) : null
       // the terminal has no head drawing, so Details also carries the figures the track leaves out
-      const figures = Svg ? [] : [`${m.kind === 'week' ? 'At week reset' : 'At 5h reset'} ${leftText(m)} · your pace ${m.noData ? 'no data' : rateText(m, m.rate)} · safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`]
+      const figures = Svg || !m ? [] : [`${m.kind === 'week' ? 'At week reset' : 'At 5h reset'} ${leftText(m)} · your pace ${m.noData ? 'no data' : rateText(m, m.rate)} · safe pace ${rateText(m, m.limit)}.${paceText(m) ? ` ${paceText(m)}` : ''}`]
       const info = [...figures, ...(last ? [LAST_INFO, lastWindowNote(last)] : [])]
+      const isOpen = open.includes(key) && !!m
       return (
       <Box
-        key={`block-${m.kind}`}
+        key={`block-${key}`}
         flexDirection="column"
         {...cardBox}
         borderStyle="round"
         borderColor="userMessageBackground"
         backgroundColor="userMessageBackground"
       >
-        {/* the countdown is drawn in the head, at its right, so its text takes the drawing's styles */}
-        {Svg ? (
-          <Box flexDirection="row" justifyContent="space-between" alignItems="flex-start" columnGap={2}>
-            {draw(`head-${m.kind}`, headerSvg(m, title, W, pal, resetsIn(m), last),
+        {top}
+        {(compare || m) && (
+          <Box key={`foot-${key}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
+            {compare ? <Text key={`compare-${key}`} color="inactive">{compare}</Text> : <Box />}
+            {m && detailsButton(key, ['1.3'])}
+          </Box>
+        )}
+        {isOpen && m && (Svg ? (
+          <Box key={`old-${key}`} flexDirection="column" gap={1}>
+            {draw(`head-${key}`, headerSvg(m, title, W, pal, resetsIn(m), last),
               `${title}. ${resetsIn(m)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}${figuresText(m)} ${lastAlt(last)}`)}
+            {chart && draw(`chart-${key}`, chart, `${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`}`)}
+            {(notes.length > 0 || controls) && (
+              <Box key={`old-foot-${key}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
+                <Box flexDirection="column" flexShrink={1}>
+                  {notes.map((note, i) => <Text key={`note-${key}-${i}`} color="inactive">{note}</Text>)}
+                </Box>
+                {controls}
+              </Box>
+            )}
+            {info.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
           </Box>
         ) : (
-          <Box flexDirection="column">
-            {/* the countdown on the title's row, so the lines under it get the card's whole width */}
+          <Box key={`old-${key}`} flexDirection="column" marginTop={1}>
             <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-              <Text bold>{title}</Text>
+              <Text bold>{`1.3 · ${title}`}</Text>
               <Text dimColor>{resetsIn(m)}</Text>
             </Box>
             {trackView(m)}
-            {/* the figures under a blank row: the two paces, then the last window, quietly */}
-            <Box key={`figures-${m.kind}`} flexDirection="column" marginTop={1}>
-              {!m.noData && (
-                <Box key={`pace-${m.kind}`} flexDirection="row" flexWrap="wrap">
-                  <Text dimColor>Pace </Text>
-                  <Text bold color={isShort(m) ? 'error' : undefined}>{rateShort(m, m.rate)}</Text>
-                  <Text dimColor> · safe </Text>
-                  <Text>{rateShort(m, m.limit)}</Text>
-                </Box>
-              )}
-              {last && (
-                <Box key={`last-${m.kind}`} flexDirection="row" columnGap={1}>
-                  <Text dimColor>{LAST_LABEL}</Text>
-                  <Text dimColor color={lastIsShort(last) ? 'error' : 'success'}>{lastWindowText(last)}</Text>
-                </Box>
-              )}
-            </Box>
+            {!m.noData && (
+              <Box key={`pace-${key}`} flexDirection="row" flexWrap="wrap">
+                <Text dimColor>Pace </Text>
+                <Text bold color={isShort(m) ? 'error' : undefined}>{rateShort(m, m.rate)}</Text>
+                <Text dimColor> · safe </Text>
+                <Text>{rateShort(m, m.limit)}</Text>
+              </Box>
+            )}
+            {last && (
+              <Box key={`last-${key}`} flexDirection="row" columnGap={1}>
+                <Text dimColor>{LAST_LABEL}</Text>
+                <Text dimColor color={lastIsShort(last) ? 'error' : 'success'}>{lastWindowText(last)}</Text>
+              </Box>
+            )}
+            {notes.map((note, i) => <Text key={`note-${key}-${i}`} color="inactive">{note}</Text>)}
+            {controls}
+            {info.map((para, i) => <Text key={`details-${key}-${i}`} dimColor>{para}</Text>)}
           </Box>
-        )}
-        {chart && Svg && (
-          draw(`chart-${m.kind}`, chart, `${emptyChartText(m, now) ? emptyChartText(m, now)!.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`}`)
-        )}
-        {/* the terminal: the note on its own, then the controls at the left and Details at the right */}
-        {!Svg && notes.map((note, i) => <Text key={`note-${m.kind}-${i}`} color="inactive">{note}</Text>)}
-        {!Svg && (controls || info.length > 0) && (
-          <Box key={`foot-${m.kind}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2}>
-            {controls ?? <Box />}
-            {detailsButton(m.kind, info)}
-          </Box>
-        )}
-        {/* under the chart, the note, the controls and Details share a row, wrapping only when there's no room */}
-        {Svg && (notes.length > 0 || controls || info.length > 0) && (
-          <Box key={`foot-${m.kind}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
-            <Box flexDirection="column" flexShrink={1}>
-              {notes.map((note, i) => <Text key={`note-${m.kind}-${i}`} color="inactive">{note}</Text>)}
-            </Box>
-            <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
-              {controls}
-              {detailsButton(m.kind, info)}
-            </Box>
-          </Box>
-        )}
-        {/* what Last window means, opened by Details: the drawings carry no tooltip */}
-        {detailsText(m.kind, info)}
+        ))}
       </Box>
       )
     }
@@ -900,15 +933,99 @@ export const register: Register = (on, options) => {
       )
     }
 
+    // ---- 1.4's parts ----
+    const toneColor = (tone: 'good' | 'bad' | 'dim') => (tone === 'good' ? 'success' : tone === 'bad' ? 'error' : undefined)
+    // the weekly card: the week's frame, then today's; on the terminal the same figures as text
+    const weekTop = (p: WeekPlan): Array<JSX.Element | null> => {
+      const past = pastDays(p, totals), hd = weekHead(p), L = weekBarLabels(p), d = todayText(p)
+      const alt = `This week, 100% = your weekly limit. ${hd.head}. ${hd.sub} ${p.noData ? '' : `${[L.used, L.add].filter(Boolean).join(', ')}. ${daysText(p, past)}.`}`
+        + (showsToday(p) ? ` Today, 100% = today's budget. ${d.predicted}. ${d.note}` : '')
+      if (Svg) return [draw('week-card', weekCardSvg(p, past, W, pal), alt)]
+      return [
+        <Box key="week-title" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+          <Text bold>This week</Text>
+          <Text dimColor>{`Resets ${dayTime(p.resetsAt)} · in ${dur((p.resetsAt - p.now) / HOUR)}`}</Text>
+        </Box>,
+        <Text key="week-frame" dimColor>This week · 100% = your weekly limit</Text>,
+        <Text key="week-head" bold dimColor={hd.tone === 'dim'} color={toneColor(hd.tone)}>{hd.head}</Text>,
+        <Text key="week-sub" dimColor>{hd.sub}</Text>,
+        ...(p.noData ? [] : [
+          <Box key="week-bar" flexDirection="row" flexWrap="wrap" columnGap={1}>
+            <Text dimColor>{L.used}</Text>
+            {L.add && <Text color={L.addBad ? 'error' : undefined} dimColor={!L.addBad}>{`· ${L.add}`}</Text>}
+            <Text dimColor>{`· ${L.end}`}</Text>
+          </Box>,
+          <Text key="week-days" dimColor>{daysText(p, past)}</Text>,
+        ]),
+        ...(showsToday(p) ? [
+          <Box key="week-today" flexDirection="column" marginTop={1}>
+            <Text dimColor>Today · 100% = today’s budget</Text>
+            <Text bold color={d.bad ? 'error' : undefined}>{d.predicted}</Text>
+            <Text dimColor>{[d.used, d.pred, d.end].filter(Boolean).join(' · ')}</Text>
+            <Text dimColor>{d.note}</Text>
+          </Box>,
+        ] : []),
+      ]
+    }
+    // the 5-hour card: clock times, and the line from its opening to its reset
+    const fiveTop = (m: Model): Array<JSX.Element | null> => {
+      const hd = fiveHead(m, now)
+      if (Svg) return [draw('five-card', fiveCardSvg(m, now, W, pal), `5-hour window, 100% = your 5-hour limit. ${hd.head}. ${hd.sub}`)]
+      return [
+        <Box key="five-title" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+          <Text bold>5-hour window</Text>
+          <Text dimColor>{`Opened ${hm(m.resetsAt - 5 * HOUR)} · resets ${hm(m.resetsAt)}`}</Text>
+        </Box>,
+        <Text key="five-frame" dimColor>100% = your 5-hour limit</Text>,
+        <Text key="five-head" bold dimColor={hd.tone === 'dim'} color={toneColor(hd.tone)}>{hd.head}</Text>,
+        <Text key="five-sub" dimColor>{hd.sub}</Text>,
+      ]
+    }
+    // what 1.3 would show, for this release only, so the change can be compared
+    const compare13 = (m: Model) => { const b = bandPart(m, false); return `1.3 shows: Week ${b.value}${b.rest}` }
+    // the projects card: this week's use by project, Other's parts under it when opened
+    const otherOpen = open.includes('other')
+    const projectsCard = (sp: ProjectSplit) => (
+      <Box key="block-projects" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
+        {Svg
+          ? draw('projects', projectsSvg(sp, W, otherOpen, pal), `Projects, this week in % of your weekly limit: ${sp.rows.map(r => `${r.name} ${one(r.pct)}%`).concat(`Other ${one(sp.otherTotal)}%`, `Unused ${one(sp.unused)}%`).join(', ')}.`)
+          : (
+            <Box flexDirection="column">
+              <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+                <Text bold>Projects</Text>
+                <Text dimColor>{`This week · ${one(sp.used)}% used, ${one(sp.unused)}% unused`}</Text>
+              </Box>
+              {[...sp.rows.map(r => ({ key: `p-${r.name}`, name: r.name, v: r.pct, dim: false })), { key: 'p-other', name: `Other ${otherOpen ? '▾' : '▸'}`, v: sp.otherTotal, dim: false },
+                ...(otherOpen ? (['chats', 'devices', 'before', 'away'] as OtherPart[]).filter(k => sp.other[k] > 0).map(k => ({ key: `p-other-${k}`, name: `  ${OTHER_INFO[k].label}`, v: sp.other[k], dim: true })) : []),
+                { key: 'p-unused', name: 'Unused', v: sp.unused, dim: true }, { key: 'p-total', name: 'Weekly limit', v: 100, dim: false }].map(r => (
+                <Box key={r.key} flexDirection="row" justifyContent="space-between" columnGap={2}>
+                  <Text dimColor={r.dim} bold={r.key === 'p-total'}>{r.name}</Text>
+                  <Text dimColor={r.dim} bold={r.key === 'p-total'}>{`${one(r.v)}%`}</Text>
+                </Box>
+              ))}
+              {otherOpen && (['chats', 'devices', 'before', 'away'] as OtherPart[]).filter(k => sp.other[k] > 0).map(k => (
+                <Text key={`p-info-${k}`} dimColor>{`${OTHER_INFO[k].label}: ${OTHER_INFO[k].text}`}</Text>
+              ))}
+              <Text dimColor>Project names stay on this computer.</Text>
+            </Box>
+          )}
+        <Box key="projects-foot" flexDirection="row" justifyContent="flex-end">
+          <Button key="other-toggle" plain dimColor label={otherOpen ? 'Hide what Other counts' : 'What Other counts'}
+            onPress={() => void update($, details, l => (l.includes('other') ? l.filter(k => k !== 'other') : [...l, 'other']))} />
+        </Box>
+      </Box>
+    )
+
     return (
       <Box key="cards" flexDirection="column">
-        {week
-          ? block('This week', week, Svg ? cardDrawing(week) : null, windowControls, [
+        {plan && week
+          ? block(week, 'week', weekTop(plan), compare13(week), 'This week', Svg ? cardDrawing(week) : null, windowControls, [
             ...(Svg && emptyChartText(week, now) ? [] : [averageNote(week)]),
           ])
           : <Text dimColor>No weekly limit reported.</Text>}
+        {split && plan && !plan.noData && projectsCard(split)}
         {five
-          ? block('5-hour window', five, Svg ? cardDrawing(five) : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
+          ? block(five, 'five', fiveTop(five), null, '5-hour window', Svg ? cardDrawing(five) : null, null, Svg && emptyChartText(five, now) ? [] : [averageNote(five)])
           : <Text dimColor>No active 5-hour window.</Text>}
         {modelsCard}
         {syncRow(sync)}
