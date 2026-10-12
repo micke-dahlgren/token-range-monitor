@@ -1,9 +1,9 @@
 import type { Palettes, RangeDay } from '../types'
-import { C, DAY, HOUR, LAST_LABEL, drawing, dur, isShort, lastIsShort, lastWindowText, leftText, rateText, spare } from './range'
+import { C, DAY, HOUR, LAST_LABEL, drawing, dur, isShort, lastIsShort, lastWindowText, rateText, spare } from './range'
 import type { BandPart, LastWindow, Model } from './range'
 import type { WeekPlan } from './pace'
 import { DEFAULT_PALETTES } from './theme'
-import { NARROW, SIZE, cardHeader, metricGrid, rect, rich, stripes, t, tile, topRounded, track, trackLabels, tw } from './ui'
+import { NARROW, SIZE, cardHeader, metricGrid, rect, rich, stripes, t, topRounded, track, trackLabels, tw } from './ui'
 import type { Run } from './ui'
 
 /**
@@ -24,6 +24,8 @@ export const hm = (t: number) => { const d = new Date(t); return `${pad(d.getHou
 export const dayName = (t: number) => DAYS[new Date(t).getDay()]!
 /** A day and time: "Thu 11:00". */
 export const dayTime = (t: number) => `${dayName(t)} ${hm(t)}`
+/** A day, its date and the time: "Thu · Oct 08 · 11:00". */
+export const dayDateTime = (t: number) => `${dayName(t)} · ${dateName(t)} · ${hm(t)}`
 /** About when, to the quarter hour: "Wed ~12:45". */
 export const around = (t: number) => { const q = Math.round(t / (15 * 60_000)) * 15 * 60_000; return `${dayName(q)} ~${hm(q)}` }
 /** One decimal, a whole number without it: "13.5", "39". */
@@ -83,11 +85,11 @@ export const partsWidth = (parts: Part[]) =>
 
 // ---- the weekly card's words ----
 
-/** The days of this window so far, each in % of the weekly limit, from the daily totals (0 for a day not on record). */
-export function pastDays(p: WeekPlan, totals: readonly RangeDay[]): number[] {
-  const open = p.resetsAt - 7 * DAY
-  return Array.from({ length: p.k }, (_, i) => totals.find(d => Math.abs(d[0] - (open + i * DAY)) < HOUR)?.[1] ?? 0)
-}
+/** The days of this window so far, each in % of the weekly limit (0 for a day not on record). */
+export const pastDays = (p: WeekPlan): number[] => p.past
+
+/** When today ends: at midnight, or at the reset when that comes first. */
+export const dayEndText = (p: WeekPlan) => (p.dayEnd === p.resetsAt ? `week resets ${hm(p.dayEnd)}` : 'day ends at midnight')
 
 /** How the projection was made, for the line under the head. */
 export function basisText(p: WeekPlan): string {
@@ -123,7 +125,7 @@ export function weekBarLabels(p: WeekPlan): { used: string; add: string | null; 
     used: `${one(p.pct)}% used`,
     add: add === null ? null : total > 100 ? `+${one(add)}% at this pace, ${one(total - 100)}% more than the limit` : `+${one(add)}% at this pace`,
     addBad: total > 100,
-    end: `100% · resets ${dayTime(p.resetsAt)}`,
+    end: `Resets ${dayDateTime(p.resetsAt)}`,
   }
 }
 
@@ -133,23 +135,20 @@ export const showsToday = (p: WeekPlan) => !p.noData && p.basis !== 'early' && p
 /** Today, in today's frame: the predicted line and the sentence under the bar. */
 export function todayText(p: WeekPlan): { predicted: string; bad: boolean; used: string; pred: string | null; end: string; note: string } {
   const how = p.basis === 'profile' ? `your usual ${FULL_DAYS[new Date(p.dayStart).getDay()]}` : 'your pace'
-  const floor = p.usedToday < p.expectedToday
-    ? `Until the day ends, today counts as at least one day at ${how}, ${one(p.predicted)}% of the budget. `
-    : ''
   return {
     predicted: `Predicted use today: ${one(p.predicted)}% of daily budget`,
     bad: p.predicted > 100,
     used: `${one(p.usedOfBudget)}% used`,
     pred: p.predicted > p.usedOfBudget + 0.05 ? `${one(p.predicted)}% predicted` : null,
-    end: `100% · day ends ${hm(p.dayEnd)}`,
-    note: `${floor}Today’s budget is what’s left of the week divided by the days left: ${one(p.budget)}% of your weekly limit.`,
+    end: `100% · ${dayEndText(p)}`,
+    note: `Predicted: what’s used so far, and the rest of the day at ${how}. Today’s budget is what’s left of the week spread over the time to the reset: ${one(p.budget)}% of your weekly limit.`,
   }
 }
 
 /** The days in words, for the terminal and alt text: "Thu 20% · Fri 7% · Sat 12% now · Sun ~13.5% …". */
 export function daysText(p: WeekPlan, past: readonly number[]): string {
-  const open = p.resetsAt - 7 * DAY, early = p.basis === 'early'
-  const out: string[] = past.map((v, i) => `${dayName(open + i * DAY)} ${one(v)}%`)
+  const early = p.basis === 'early'
+  const out: string[] = past.map((v, i) => `${dayName(p.days[i]!.start)} ${one(v)}%`)
   out.push(`${dayName(p.dayStart)} ${one(p.usedToday)}% now`)
   for (const d of p.later) out.push(`${dayName(d.start)} ${early ? '?' : d.amount > 0 ? `~${one(d.amount)}%` : '0%'}`)
   return out.join(' · ')
@@ -169,12 +168,6 @@ export function weekHeadline(p: WeekPlan): { head: string; tone: 'good' | 'bad' 
   return { head: `About ${Math.max(0, Math.round(p.left))}% left at the reset`, tone: 'good', badge: p.miss ? `±${p.miss} pts` : null }
 }
 
-/** What the headline is based on, its figure in bold. */
-export function basisRuns(p: WeekPlan): Run[] {
-  if (p.noData) return [{ s: p.noData }]
-  if (p.basis === 'pace') return [{ s: `At your pace over the last ${p.paceDays === 1 ? 'whole day' : `${p.paceDays} whole days`}: ` }, strong(`${one(p.pacePerDay)}% a day.`)]
-  return [{ s: basisText(p) }]
-}
 
 /** How far off the projection typically is, and the range that makes, under the basis. */
 export function missRuns(p: WeekPlan): Run[] | null {
@@ -183,30 +176,42 @@ export function missRuns(p: WeekPlan): Run[] | null {
   return [{ s: `Typical forecast miss: ${p.miss} points. Read this as ` }, strong(lo < 0 ? `between ${-lo}% short and ${hi}% to spare.` : `${lo}–${hi}% to spare.`)]
 }
 
-/** Today's sentence, its figure in week terms in bold. */
-export function todayRuns(p: WeekPlan): Run[] {
-  const d = todayText(p), tail = `${one(p.budget)}% of your weekly limit.`
-  return [{ s: d.note.slice(0, d.note.length - tail.length) }, strong(tail)]
-}
 
-/** The 5-hour figures under its head, in runs. */
-export function fiveRuns(m: Model, now: number): Run[] {
-  const h = fiveHead(m, now)
-  if (m.noData || m.pct >= 100) return [{ s: h.sub }]
-  const opened = m.resetsAt - 5 * HOUR
-  const used: Run[] = [strong(`${Math.round(m.pct)}% used`), { s: ` since ${hm(opened)}, ` }, strong(`${one(m.rate)}% an hour.`)]
-  const cut = cutOff(m, now)
-  if (cut !== null) return [...used, { s: ` It resets at ${hm(m.resetsAt)}, ` }, { s: `${dur((m.resetsAt - cut) / HOUR)} after the cut-off.`, fill: C.bad }]
-  return [...used, { s: ' About ' }, { s: `${Math.round(m.arrive)}% to spare`, fill: C.good, weight: 600 }, { s: ' at the reset.' }]
-}
 
 // ---- drawing ----
 
 const TONE = { good: C.accent, bad: C.bad, dim: C.muted }
-/** A frame's label: "This week · 100% = your weekly limit". */
-const frame = (y: number, s: string) => t(0, y, s, { size: SIZE.meta, fill: C.muted })
 
-/** The pane's masthead: the mark, and the name and what it's for. */
+/**
+ * A limit's use as one bar, `width` wide from `y`, on 0–100% of the limit: solid to what's used (`pct`), striped to
+ * where the pace ends up by the reset (`total`, or null with no projection), a mark at 100%. Each figure is centred
+ * in its own part, the total on a chip over the stripes and in red past 100%, so there's nothing to add up. Under the
+ * bar, at its ends, when the window opened (`start`) and when it resets (`end`); a figure whose part is too narrow for
+ * it goes between them. The y under it all comes back.
+ */
+function limitBar(y: number, width: number, pct: number, total: number | null, stripe: string, start: string, end: string): { svg: string; y: number } {
+  const BW = width - 2, BH = 24, used = Math.min(100, pct), to = total === null ? used : Math.min(100, total), over = (total ?? 0) > 100
+  let s = track(0, y, BW, BH, used / 100, to / 100, 1, { stripe })
+  const ty = y + BH / 2 + SIZE.meta * 0.36
+  const inBar = (label: string, x0: number, x1: number, chip: boolean, fill: string) => {
+    const w = tw(label, SIZE.meta, 600), cx = (x0 + x1) / 2
+    if (x1 - x0 < w + (chip ? 16 : 10)) return false
+    if (chip) s += rect(cx - w / 2 - 6, y + 3, w + 12, BH - 6, `fill:${C.card}`, ' rx="4"')
+    s += t(cx, ty, label, { size: SIZE.meta, weight: 600, fill, anchor: 'middle' })
+    return true
+  }
+  const usedX = BW * used / 100, toX = BW * to / 100
+  const usedIn = inBar(`${one(pct)}%`, 0, usedX, false, C.card)
+  const totalIn = total === null || inBar(`~${one(total)}%`, usedX, toX, true, over ? C.bad : C.fg)
+  const between: Run[] = [
+    ...(usedIn ? [] : [strong(`${one(pct)}%`, C.fg, 500), { s: ' used' }]),
+    ...(totalIn ? [] : [{ s: usedIn ? '' : ' · ' }, strong(`~${one(total!)}%`, over ? C.bad : C.fg, 500), { s: ' by the reset' }]),
+  ]
+  const row = trackLabels([[{ s: start }], between.length ? between : null, [{ s: end }]], y + BH + 8 + SIZE.meta * 1.15, width)
+  return { svg: s + row.svg, y: row.y + SIZE.meta * 0.6 }
+}
+
+/** The pane's masthead: the mark and the name. */
 export function mastheadSvg(width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const narrow = width < NARROW
   const m = narrow ? 0 : 48, gap = narrow ? 0 : 15
@@ -217,9 +222,8 @@ export function mastheadSvg(width: number, pal: Palettes = DEFAULT_PALETTES): st
     s += `<g transform="translate(9 9) scale(0.9375)" style="fill:${C.accent}"><rect x="3" y="17" width="6" height="12" rx="2"/><rect x="13" y="3" width="6" height="26" rx="2"/><rect x="23" y="11" width="6" height="18" rx="2"/></g>`
   }
   const ts = narrow ? 24 : SIZE.title
-  s += t(m + gap, narrow ? 24 : 26, 'Token Range Monitor', { size: ts, weight: 650 })
-  s += t(m + gap, narrow ? 46 : 46, 'Track your usage, limits, and the time you have left.', { size: SIZE.meta, fill: C.muted })
-  return drawing(s, 52, pal)
+  s += t(m + gap, narrow ? 24 : 34, 'Token Range Monitor', { size: ts, weight: 650 })
+  return drawing(s, narrow ? 30 : 48, pal)
 }
 
 /** A nice top for the days' scale: a little over the tallest, in whole even points. */
@@ -229,17 +233,15 @@ function scaleTop(max: number): number {
 }
 
 /**
- * The weekly card, `width` wide, down to the days' caption: its header; the week's frame (the headline and
- * its range, what it's based on, the whole week as one bar); the days of this window as seven columns on one
- * scale, past days solid, today solid with its expected rest striped, later days striped, today's and later
- * days' daily budget outlined unless `showBudget` is off. The legend and today's frame are drawn apart
- * (`weekLegendSvg`, `todaySvg`), the budget's switch between them.
+ * The weekly card, `width` wide, down to the days' dates: its header; the week's frame (the headline and
+ * its range, the whole week as one bar); the days of this window as seven columns on one
+ * scale (calendar days; the first and last part days where the reset falls mid-day), past days solid, today solid with its expected rest striped, later days striped, today's and later
+ * days' daily budget outlined. The legend and today's frame are drawn apart (`weekLegendSvg`, `todaySvg`).
  */
-export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number, pal: Palettes = DEFAULT_PALETTES, showBudget = true): string {
+export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const W = width
   let s = `<defs>${stripes('wk', C.raised)}${stripes('wkd', C.inset)}</defs>`
-  const head = cardHeader('calendar', 'This week', 'Your weekly usage and limit',
-    [{ s: `Resets ${dayTime(p.resetsAt)} ` }, { s: '·', fill: C.faint }, { s: ` in ${dur((p.resetsAt - p.now) / HOUR)}` }], W)
+  const head = cardHeader('calendar', 'This week', [], W)
   s += head.svg
   let y = head.y
 
@@ -248,7 +250,10 @@ export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number,
   const hs = W < NARROW ? 24 : SIZE.title
   const badgeW = h.badge ? tw(h.badge, SIZE.meta, 500) + 14 : 0
   const fitsOne = tw(h.head, hs, 600) + (h.badge ? 12 + badgeW : 0) <= W
-  const hl = rich([{ s: h.head, fill: TONE[h.tone], weight: 600 }], 0, y + hs * 0.95, W, hs, 1.3)
+  // only the figure carries the tone (a %, or a time); the rest of the headline is in the text colour
+  const headRuns: Run[] = h.head.split(/(~?\d+(?:\.\d+)?%|~\d\d:\d\d)/).filter(Boolean)
+    .map((part, i) => ({ s: part, fill: i % 2 || /^~?\d/.test(part) ? TONE[h.tone] : C.fg, weight: 600 }))
+  const hl = rich(headRuns, 0, y + hs * 0.95, W, hs, 1.3)
   s += hl.svg
   y = hl.y
   if (h.badge) {
@@ -256,10 +261,7 @@ export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number,
     s += rect(bx, by, badgeW, 23, `fill:${C.raised}`, ' rx="5"') + t(bx + 7, by + 16, h.badge, { size: SIZE.meta, weight: 500, fill: C.muted })
     if (!fitsOne) y += 30
   }
-  y += hs * 0.3 + 7
-  const basis = rich(basisRuns(p), 0, y + SIZE.body * 1.15, W, SIZE.body, 1.75)
-  s += basis.svg
-  y = basis.y + SIZE.body * 0.6
+  y += hs * 0.3
   const miss = missRuns(p)
   if (miss) {
     const r = rich(miss, 0, y + 5 + SIZE.meta * 1.2, W, SIZE.meta, 1.7)
@@ -270,28 +272,18 @@ export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number,
   // ---- the whole week as one bar ----
   if (!p.noData) {
     y += 17
-    s += frame(y + SIZE.meta, 'This week · 100% = your weekly limit')
-    y += SIZE.meta * 1.5 + 7
-    const used = Math.min(100, p.pct), add = p.basis === 'early' ? 0 : toCome(p), end = Math.min(100, p.pct + add)
-    s += track(0, y, W - 2, 19, used / 100, end / 100, 1, { stripe: 'wk' })
-    y += 19 + 8
-    const L = weekBarLabels(p), over = p.pct + add > 100
-    const row = trackLabels([
-      [strong(`${one(p.pct)}%`, C.fg, 500), { s: ' used' }],
-      L.add ? [strong(`+${one(add)}%`, over ? C.bad : C.fg, 500), { s: ' at this pace' }, ...(over ? [{ s: `, ${one(p.pct + add - 100)}% more than the limit`, fill: C.bad }] : [])] : null,
-      [{ s: L.end }],
-    ], y + SIZE.meta * 1.15, W)
-    s += row.svg
-    y = row.y + SIZE.meta * 0.6
+    const L = weekBarLabels(p), bar = limitBar(y, W, p.pct, L.add === null ? null : p.pct + toCome(p), 'wk', `Started ${dayDateTime(p.resetsAt - 7 * DAY)}`, L.end)
+    s += bar.svg
+    y = bar.y
   }
 
   // ---- the days of this window, one scale ----
   if (!p.noData && p.pct < 100) {
-    const early = p.basis === 'early', open = p.resetsAt - 7 * DAY, narrow = W < NARROW
-    const vals = [...past, early ? p.usedToday : p.today, ...(early ? [] : p.later.map(d => d.amount)), early || !showBudget ? 0 : p.budget]
+    const early = p.basis === 'early', narrow = W < NARROW, n = p.days.length
+    const vals = [...past, early ? p.usedToday : p.today, ...(early ? [] : p.later.map(d => d.amount)), early ? 0 : p.budgetPerDay]
     const top = scaleTop(Math.max(...vals))
-    const axisW = narrow ? 32 : 36, gap = narrow ? 9 : W < 760 ? 14 : 18
-    const colW = (W - axisW - 4 - gap * 6) / 7, area = narrow ? 110 : 136
+    const axisW = narrow ? 32 : 36, gap = narrow ? 7 : W < 760 ? 12 : 16
+    const colW = (W - axisW - 4 - gap * (n - 1)) / n, area = narrow ? 110 : 136
     y += 22
     const vy = y + 13, base = y + 30 + area
     const hOf = (v: number) => Math.max(0, Math.min(v, top)) / top * area
@@ -301,8 +293,8 @@ export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number,
       if (f > 0) s += `<line x1="${axisW}" x2="${W}" y1="${ly.toFixed(1)}" y2="${ly.toFixed(1)}" style="stroke:${C.line}" stroke-dasharray="3 3"/>`
       s += t(axisW - (narrow ? 6 : 9), ly + SIZE.meta * 0.36, `${one(label)}%`, { size: SIZE.meta, fill: C.muted, anchor: 'end' })
     }
-    for (let i = 0; i < 7; i++) {
-      const x = axisW + i * (colW + gap), cx = x + colW / 2, isToday = i === p.k
+    for (let i = 0; i < n; i++) {
+      const day = p.days[i]!, x = axisW + i * (colW + gap), cx = x + colW / 2, isToday = i === p.k
       let v = '', vFill: string = C.muted
       if (i < p.k) {
         const hv = hOf(past[i] ?? 0)
@@ -322,23 +314,25 @@ export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number,
         if (hd > 0) s += `<path d="${topRounded(x + 0.5, base - hd, colW - 1, hd, 4)}Z" style="fill:url(#wkd);stroke:${C.accent}"/>`
         v = d.amount > 0 ? `~${one(d.amount)}%` : '0%'
       }
-      // the daily budget, outlined over today and the days after it
-      if (!early && showBudget && i >= p.k) {
-        const hb = hOf(p.budget)
+      // the daily budget, outlined over today and the days after it (a part day's in proportion)
+      if (!early && i >= p.k) {
+        const hb = hOf(isToday ? p.budget : p.budgetPerDay * day.share)
         s += `<path d="${topRounded(x - 3, base - hb, colW + 6, hb, 4)}" fill="none" style="stroke:${C.muted}"/>`
       }
       const vs = tw(v, SIZE.meta) > colW + gap - 2 ? v.replace('%', '').replace('~', '') : v
       s += t(cx, vy, vs, { size: SIZE.meta, fill: vFill, anchor: 'middle' })
-      const name = dayName(open + i * DAY), date = dateName(open + i * DAY)
+      const name = dayName(day.start), date = dateName(day.start)
       s += t(cx, base + 9 + SIZE.meta * 1.15, name, { size: SIZE.meta, fill: isToday ? C.accent : C.fg, anchor: 'middle' })
       if (isToday) s += `<circle cx="${(cx + tw(name, SIZE.meta) / 2 + 6).toFixed(1)}" cy="${(base + 9 + SIZE.meta * 0.78).toFixed(1)}" r="2" style="fill:${C.accent}"/>`
-      const dl = isToday && colW + gap > tw(`${date} · now`, SIZE.meta) + 4 ? `${date} · now` : isToday ? 'now' : date
-      s += t(cx, base + 9 + SIZE.meta * 2.65, colW + gap > tw(dl, SIZE.meta) ? dl : dl.slice(4), { size: SIZE.meta, fill: isToday ? C.accent : C.muted, anchor: 'middle' })
+      // under the name: the date; the window's part days say where they start or stop; today says it's now
+      const part = day.share < 1 ? (i === 0 ? `from ${hm(day.start)}` : i === n - 1 ? `to ${hm(day.end)}` : null) : null
+      const fits = (l: string) => colW + gap > tw(l, SIZE.meta) + 2
+      const dl = isToday ? (fits(`${date} · now`) ? `${date} · now` : 'now')
+        : part ? (fits(part) ? part : part.replace(/^\S+ /, '')) : fits(date) ? date : date.slice(4)
+      s += t(cx, base + 9 + SIZE.meta * 2.65, dl, { size: SIZE.meta, fill: isToday ? C.accent : C.muted, anchor: 'middle' })
     }
     s += `<line x1="${axisW}" x2="${W}" y1="${(base + 0.5).toFixed(1)}" y2="${(base + 0.5).toFixed(1)}" style="stroke:${C.line}"/>`
-    y = base + 9 + SIZE.meta * 2.65 + 13
-    s += t(0, y + SIZE.meta * 1.15, 'Each day, in % of your weekly limit', { size: SIZE.meta, fill: C.muted })
-    y += SIZE.meta * 1.6
+    y = base + 9 + SIZE.meta * 2.65
   }
   return drawing(s, Math.ceil(y + 4), pal)
 }
@@ -354,42 +348,39 @@ export function weekLegendSvg(early: boolean, pal: Palettes = DEFAULT_PALETTES):
   return { svg: drawing(s, 22, pal), width: Math.ceil(w) }
 }
 
+/** When today passes its budget at this pace (ms): now when it already has, null when it stays within it. */
+export function overBudgetAt(p: WeekPlan): number | null {
+  if (p.usedOfBudget >= 100) return p.now
+  if (p.predicted <= 100) return null
+  // the rest of today's expected use runs evenly to the day's end
+  const rest = p.today - p.usedToday
+  return Math.round((p.now + (p.budget - p.usedToday) / rest * (p.dayEnd - p.now)) / 60_000) * 60_000
+}
+
 /**
- * Today's frame, `width` wide, on its panel: the predicted use in % of today's budget beside a bar from 0 to
- * today's budget (past it when today runs over), solid to what's used, striped to the prediction, a mark at
- * 100%; then the one sentence that gives the budget in week terms.
+ * The today card, `width` wide, laid out as the 5-hour card is: its header; when today passes its budget at
+ * this pace (its time in red) or that it stays within it; and today's use as one bar on 0–100% of today's
+ * budget (`limitBar`): solid for what's used, striped to the prediction, the day's start and end under it.
  */
 export function todaySvg(p: WeekPlan, width: number, pal: Palettes = DEFAULT_PALETTES): string {
-  const W = width, pad = W < NARROW ? 16 : 20, inner = W - pad * 2, narrow = W < NARROW + 40
-  const d = todayText(p)
-  let s = `<defs>${stripes('td', C.accentBg)}</defs>`
-  // the metric: its icon, what it is and the figure
-  const mx = pad, my = pad
-  const iconW = narrow ? 0 : 43 + 13
-  if (!narrow) s += tile('bars', mx, my, 43, C.accent)
-  s += t(mx + iconW, my + 16 * 1.05, 'Predicted use today', { size: SIZE.body, weight: 500 })
-  s += t(mx + iconW, my + 16 * 1.3 + SIZE.title * 1.05, `${one(p.predicted)}%`, { size: SIZE.title, weight: 650, fill: d.bad ? C.bad : C.accent })
-  s += t(mx + iconW, my + 16 * 1.3 + SIZE.title * 1.35 + SIZE.meta * 1.05, 'of daily budget', { size: SIZE.meta, fill: C.muted })
-  const metricH = 16 * 1.3 + SIZE.title * 1.35 + SIZE.meta * 1.4
-  // the bar: beside the metric where it's wide, under it where it's narrow
-  const bx = narrow ? pad : pad + 235 + 22, bw = narrow ? inner : W - pad - bx
-  const barBlock = SIZE.meta * 1.5 + 8 + 23 + 8 + SIZE.meta * 1.6
-  let by = narrow ? my + metricH + 17 : my + Math.max(0, (metricH - barBlock) / 2)
-  s += t(bx, by + SIZE.meta * 1.1, 'Today · 100% = today’s budget', { size: SIZE.meta, fill: C.muted })
-  by += SIZE.meta * 1.5 + 8
-  const scale = Math.max(100, p.predicted, p.usedOfBudget)
-  s += track(bx, by, bw, 23, p.usedOfBudget / scale, p.predicted / scale, 100 / scale, { stripe: 'td', usedFill: p.usedOfBudget > 100 ? C.bad : C.accent })
-  by += 23 + 8
-  const row = trackLabels([
-    [strong(`${one(p.usedOfBudget)}%`, C.fg, 600), { s: ' used' }],
-    d.pred ? [strong(`${one(p.predicted)}%`, d.bad ? C.bad : C.fg, 600), { s: ' predicted' }] : null,
-    [{ s: d.end }],
-  ], by + SIZE.meta * 1.15, bw)
-  s += `<g transform="translate(${bx.toFixed(1)} 0)">${row.svg}</g>`
-  const top = Math.max(my + metricH, row.y + SIZE.meta * 0.6)
-  const note = rich(todayRuns(p), pad, top + 16 + SIZE.meta * 1.2, inner, SIZE.meta, 1.75)
-  const H = note.y + SIZE.meta * 0.6 + pad
-  return drawing(rect(0, 0, W, H, `fill:${C.panel}`, ' rx="10"') + s + note.svg, Math.ceil(H), pal)
+  const W = width
+  let s = `<defs>${stripes('td', C.raised)}</defs>`
+  const head = cardHeader('bars', 'Today', [], W)
+  s += head.svg
+  let y = head.y
+  const hs = W < NARROW ? 24 : SIZE.title, over = overBudgetAt(p)
+  const title: Run[] = over === null
+    ? [{ s: 'Within today’s budget', fill: C.fg }, { s: ' at this pace', fill: C.fg }]
+    : over <= p.now
+      ? [{ s: 'Over today’s budget', fill: C.bad }]
+      : [{ s: 'Over budget ', fill: C.fg }, { s: `~${hm(over)}`, fill: C.bad }, { s: ' at this pace', fill: C.fg }]
+  const hl = rich(title, 0, y + hs * 1.0, W, hs, 1.35, { weight: 600 })
+  s += hl.svg
+  y = hl.y + hs * 0.35 + 27
+  const end = p.dayEnd === p.resetsAt ? `Week resets ${hm(p.dayEnd)}` : 'Ends at midnight'
+  const bar = limitBar(y, W, p.usedOfBudget, p.predicted > p.usedOfBudget + 0.05 ? p.predicted : null, 'td', `Started ${hm(p.dayStart)}`, end)
+  s += bar.svg
+  return drawing(s, Math.ceil(bar.y + 4), pal)
 }
 
 // ---- the 5-hour card ----
@@ -414,18 +405,15 @@ export function fiveSummary(m: Model): Run[] {
 }
 
 /**
- * The 5-hour card, `width` wide: its header; "100% = your 5-hour limit"; the cut-off (its time in red) or
- * the reset it lasts to, with the figures under it; and the window's use as one bar on that scale: solid for
- * what's used, striped for what this pace adds by the reset.
+ * The 5-hour card, `width` wide: its header; the cut-off (its time in red) or the reset it lasts to; and the window's
+ * use as one bar on that scale (`limitBar`): solid for what's used, striped to where this pace ends up by the reset.
  */
 export function fiveCardSvg(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const W = width, opened = m.resetsAt - 5 * HOUR
   let s = `<defs>${stripes('fv', C.raised)}</defs>`
-  const head = cardHeader('clock', '5-hour window', 'Track your short-term limit and usage', [{ s: `Opened ${hm(opened)} · resets ${hm(m.resetsAt)}` }], W)
+  const head = cardHeader('clock', '5-hour window', [], W)
   s += head.svg
   let y = head.y
-  s += frame(y + SIZE.meta, '100% = your 5-hour limit')
-  y += SIZE.meta * 1.5 + 5
   const h = fiveHead(m, now), cut = m.noData ? null : cutOff(m, now)
   const hs = W < NARROW ? 24 : SIZE.title
   const title: Run[] = cut !== null && m.pct < 100
@@ -435,31 +423,20 @@ export function fiveCardSvg(m: Model, now: number, width: number, pal: Palettes 
       : [{ s: h.head, fill: TONE[h.tone] }]
   const hl = rich(title, 0, y + hs * 1.0, W, hs, 1.35, { weight: 600 })
   s += hl.svg
-  y = hl.y + hs * 0.35 + 7
-  const sub = rich(fiveRuns(m, now), 0, y + SIZE.body * 1.15, W, SIZE.body, 1.75)
-  s += sub.svg
-  y = sub.y + SIZE.body * 0.6
+  y = hl.y + hs * 0.35
   if (m.noData) return drawing(s, Math.ceil(y + 8), pal)
 
-  // ---- the window's use as one bar, on the card's scale: used, then what this pace adds by the reset ----
+  // ---- the window's use as one bar, on the card's scale: used, then where this pace ends up by the reset ----
   y += 27
-  const proj = 100 - m.arrive, used = Math.min(100, m.pct), add = Math.max(0, proj - m.pct), over = proj > 100
-  s += track(0, y, W - 2, 19, used / 100, Math.min(100, proj) / 100, 1, { stripe: 'fv' })
-  y += 19 + 8
-  const row = trackLabels([
-    [strong(`${one(m.pct)}%`, C.fg, 500), { s: ' used' }],
-    add > 0 ? [strong(`+${one(add)}%`, over ? C.bad : C.fg, 500), { s: ' at this pace' }, ...(over ? [{ s: `, cut off ~${hm(cut ?? m.resetsAt)}`, fill: C.bad }] : [])] : null,
-    [{ s: `100% · resets ${hm(m.resetsAt)}` }],
-  ], y + SIZE.meta * 1.15, W)
-  s += row.svg
-  y = row.y + SIZE.meta * 0.6
+  const proj = 100 - m.arrive, bar = limitBar(y, W, m.pct, proj > m.pct ? proj : null, 'fv', `Started ${hm(opened)}`, `Resets ${hm(m.resetsAt)}`)
+  s += bar.svg
+  y = bar.y
   return drawing(s, Math.ceil(y + 4), pal)
 }
 
-/** A 1.3 head's figures, as the Details' grid shows them: what's left at the reset, the two paces, the last window. */
+/** A 1.3 head's figures, as the Details' grid shows them: the two paces, the last window. */
 export function oldFigures(m: Model, last: LastWindow | null, width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const items = [
-    { label: m.kind === 'week' ? 'At week reset' : 'At 5h reset', value: leftText(m), fill: m.noData ? C.muted : isShort(m) ? C.bad : C.good },
     { label: 'Your pace', value: m.noData ? 'No data' : rateText(m, m.rate) },
     { label: 'Safe pace', value: rateText(m, m.limit) },
     ...(last ? [{ label: LAST_LABEL, value: lastWindowText(last), fill: lastIsShort(last) ? C.bad : C.good }] : []),

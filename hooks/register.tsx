@@ -12,7 +12,7 @@ import { DEFAULT_PALETTES, historyPalettes, palettesFor, resolveTheme } from './
 import { dailyTotals, selfCheck, typicalMiss, weekPlan } from './pace'
 import type { WeekPlan } from './pace'
 import {
-  cutOff, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
+  cutOff, dayEndText, overBudgetAt, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
   showsToday, toCome, todaySvg, todayText, weekBarLabels, weekCardSvg, weekHead, weekHeadline, weekLegendSvg, weekPart,
 } from './cards'
 import type { Run } from './ui'
@@ -843,7 +843,7 @@ export const register: Register = (on, options) => {
             `${title}. ${resetsIn(m)}. ${isShort(m) ? `${runsOut(m)}. ` : ''}${figuresText(m)} ${lastAlt(last)}`),
           draw(`chart-${m.kind}`, chart, empty ? empty.join('. ') : `${averageNote(m)} Your pace ${rateText(m, m.rate)}, safe pace ${rateText(m, m.limit)}.`),
           <Box key={`old-foot-${m.kind}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2} rowGap={gap}>
-            <Text key={`note-${m.kind}`} color="inactive">{empty ? '' : m.kind === 'five' ? `${averageNote(m)} ${resetsIn(m)}.` : averageNote(m)}</Text>
+            <Text key={`note-${m.kind}`} color="inactive">{empty || m.kind === 'five' ? '' : averageNote(m)}</Text>
             {controls}
           </Box>,
           extra,
@@ -851,29 +851,29 @@ export const register: Register = (on, options) => {
         ]
       }
 
-      const showBudget = !s.hideBudget
       const weekCard = plan && week ? (() => {
-        const past = pastDays(plan, totals), hd = weekHead(plan), L = weekBarLabels(plan), d = todayText(plan)
+        const past = pastDays(plan), hd = weekHead(plan), L = weekBarLabels(plan)
         const alt = `This week, 100% = your weekly limit. ${hd.head}. ${hd.sub} ${plan.noData ? '' : `${[L.used, L.add].filter(Boolean).join(', ')}. ${daysText(plan, past)}.`}`
         const chart = !plan.noData && plan.pct < 100
         const legend = weekLegendSvg(plan.basis === 'early', pal)
         return card('week', [
-          draw('week-card', weekCardSvg(plan, past, W, pal, showBudget), alt),
+          draw('week-card', weekCardSvg(plan, past, W, pal), alt),
           chart && (
-            <Box key="week-legend-row" flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2}>
+            <Box key="week-legend-row" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={2}>
               {draw('week-legend', legend.svg, plan.basis === 'early' ? 'Solid: used. Outlined: not known yet.' : 'Solid: used. Striped: expected at your pace.', legend.width)}
-              {plan.basis !== 'early' && (
-                <Button key="budget-toggle" plain dimColor label={`${showBudget ? '☑' : '☐'} Show daily budget`} onPress={() => void choose($, { hideBudget: showBudget })} />
-              )}
             </Box>
           ),
-          showsToday(plan) && draw('week-today', todaySvg(plan, W, pal), `Today, 100% = today's budget. ${d.predicted}. ${d.note}`),
         ], {
           detailsKey: 'week',
-          summary: <Text key="summary-week" color="inactive">Usage chart, pace & last window</Text>,
+          summary: <Box key="summary-week" />,
           inner: () => oldInner(week, 'This week', modeButtons, windowRow),
         })
       })() : <Text key="no-week" dimColor>No weekly limit reported.</Text>
+
+      // today, in today's budget: a card of its own under the week's
+      const todayCard = plan && week && showsToday(plan)
+        ? card('today', [draw('today-card', todaySvg(plan, W, pal), (() => { const d = todayText(plan); return `Today, 100% = today's budget. ${d.predicted}. ${d.note}` })())])
+        : null
 
       const fiveCard = five ? card('five', [
         draw('five-card', fiveCardSvg(five, now, W, pal), (() => { const hd = fiveHead(five, now); return `5-hour window, 100% = your 5-hour limit. ${hd.head}. ${hd.sub}` })()),
@@ -889,7 +889,7 @@ export const register: Register = (on, options) => {
         split && draw('models-usage', modelsUsage(split, W, pal), splitText(split)),
       ], {
         detailsKey: 'models',
-        summary: <Text key="summary-models" color="inactive">Token cost per model</Text>,
+        summary: <Box key="summary-models" />,
         inner: () => [
           costTable,
           compareRow,
@@ -909,6 +909,7 @@ export const register: Register = (on, options) => {
           </Box>
           <Box key="pane" flexDirection="column">
             {weekCard}
+            {todayCard}
             {fiveCard}
             {modelsCard}
             {syncRow(sync)}
@@ -921,28 +922,52 @@ export const register: Register = (on, options) => {
     const cardBox = { gap: 0, marginBottom: 0, paddingX: 1 }
     // the card's inner width: the pane's, less the border and a column of padding each side
     const inner = Math.max(20, e.props.bodyColumns - 4)
-    /** A bar on a card's scale, 100% at its right end: what's used solid, what this pace adds shaded, the rest faint. */
-    const hbar = (key: string, used: number, to: number, bad = false) => {
-      const n = inner, u = Math.round(n * Math.max(0, Math.min(1, used / 100))), t = Math.max(u, Math.round(n * Math.max(0, Math.min(1, to / 100))))
-      return (
-        <Box key={key} flexDirection="row">
-          <Text color="claude">{'█'.repeat(u)}</Text>
-          <Text color="claude" dimColor={!bad}>{'▒'.repeat(t - u)}</Text>
-          <Text color="subtle">{'░'.repeat(n - t)}</Text>
-        </Box>
-      )
+    /**
+     * A bar on a card's scale, 100% at its right end: what's used solid with its figure in it, shaded to where this
+     * pace ends up with that total in it (in red past 100%), the rest faint. A figure its part can't hold is left out
+     * of the bar and comes back, so the line under it can say it.
+     */
+    const hbar = (key: string, used: number, total: number | null) => {
+      const n = inner, clamp = (v: number) => Math.max(0, Math.min(1, v / 100))
+      const u = Math.round(n * clamp(used)), t = total === null ? u : Math.max(u, Math.round(n * clamp(total)))
+      const over = (total ?? 0) > 100
+      // a label centred in a run of `w` cells, padded with `fill`; null when it doesn't fit with a cell either side
+      const centred = (label: string, w: number, fill: string) => {
+        if (w < label.length + 2) return null
+        const l = Math.floor((w - label.length) / 2)
+        return fill.repeat(l) + label + fill.repeat(w - l - label.length)
+      }
+      const usedLabel = `${one(used)}%`, totalLabel = total === null ? null : `~${one(total)}%`
+      const solid = centred(usedLabel, u, ' ')
+      const shade = totalLabel === null ? '▒'.repeat(t - u) : centred(` ${totalLabel} `, t - u, '▒')
+      const missing = [...(solid === null ? [`${usedLabel} used`] : []), ...(totalLabel !== null && shade === null ? [`${totalLabel} by the reset`] : [])]
+      return {
+        bar: (
+          <Box key={key} flexDirection="row">
+            <Text color="inverseText" backgroundColor="claude" bold>{solid ?? ' '.repeat(u)}</Text>
+            <Text color={over ? 'error' : 'claude'} bold={over}>{shade ?? '▒'.repeat(t - u)}</Text>
+            <Text color="subtle">{'░'.repeat(n - t)}</Text>
+          </Box>
+        ),
+        missing,
+      }
     }
-    /** The line under a bar: what it shows on the left, what its 100% is on the right. */
-    const barLabels = (key: string, left: JSX.Element[], right: string) => (
+    /** The line under a bar: what the bar couldn't hold on the left, when it resets on the right. */
+    const barFoot = (key: string, missing: string[], right: string) => (
       <Box key={key} flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-        <Box flexDirection="row" flexWrap="wrap" columnGap={1}>{left}</Box>
+        <Text dimColor>{missing.join(' · ')}</Text>
         <Text dimColor>{right}</Text>
       </Box>
     )
-    const titleRow = (key: string, title: string, right: string) => (
+    /** A card's title, and its headline on the right: only the figure in it (a %, or a time) in colour. */
+    const titleRow = (key: string, title: string, head: string, tone: 'good' | 'bad' | 'dim') => (
       <Box key={key} flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
         <Text bold>{title}</Text>
-        <Text dimColor>{right}</Text>
+        <Box flexDirection="row">
+          {head.split(/(~?\d+(?:\.\d+)?%|~\d\d:\d\d)/).filter(Boolean).map((part, i) => (
+            <Text key={`h${i}`} bold dimColor={tone === 'dim'} color={tone !== 'dim' && /^~?\d/.test(part) ? (tone === 'bad' ? 'error' : 'claude') : undefined}>{part}</Text>
+          ))}
+        </Box>
       </Box>
     )
     /**
@@ -950,9 +975,9 @@ export const register: Register = (on, options) => {
      * name under it, past days and today solid, the days to come dim at this pace.
      */
     const dayColumns = (p: WeekPlan) => {
-      const open0 = p.resetsAt - 7 * DAY, early = p.basis === 'early'
+      const early = p.basis === 'early'
       const days = [
-        ...pastDays(p, totals).map((v, i) => ({ name: dayName(open0 + i * DAY), v, label: `${one(v)}%`, later: false, today: false })),
+        ...pastDays(p).map((v, i) => ({ name: dayName(p.days[i]!.start), v, label: `${one(v)}%`, later: false, today: false })),
         { name: dayName(p.dayStart), v: p.usedToday, label: `${one(p.usedToday)}%`, later: false, today: true },
         ...p.later.map(d => ({ name: dayName(d.start), v: early ? 0 : d.amount, label: early ? '?' : `~${one(d.amount)}%`, later: true, today: false })),
       ]
@@ -977,54 +1002,42 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
-    // the weekly card: the week as a bar, its days as columns, then today against its budget
+    const termCard = (key: string, children: Array<JSX.Element | null | false>) => (
+      <Box key={`block-${key}`} flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">{children}</Box>
+    )
+    // the weekly card: its headline, the week as a bar, its days as columns
     const weekCardTerm = (p: WeekPlan) => {
-      const hd = weekHeadline(p), L = weekBarLabels(p), d = todayText(p)
-      const add = p.basis === 'early' ? 0 : toCome(p)
-      return (
-        <Box key="block-week" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
-          {titleRow('week-title', 'This week', `resets ${dayTime(p.resetsAt)} · in ${dur((p.resetsAt - p.now) / HOUR)}`)}
-          <Box key="week-head" flexDirection="row" columnGap={1}>
-            <Text bold dimColor={hd.tone === 'dim'} color={hd.tone === 'dim' ? undefined : 'claude'}>{hd.head}</Text>
-            {hd.badge && <Text dimColor>{hd.badge}</Text>}
-          </Box>
-          {!p.noData && hbar('week-bar', p.pct, p.pct + add, L.addBad)}
-          {!p.noData && barLabels('week-labels', [
-            <Text key="u">{L.used}</Text>,
-            ...(L.add ? [<Text key="a" color={L.addBad ? 'claude' : undefined} dimColor={!L.addBad}>{`· ${L.add}`}</Text>] : []),
-          ], '100% = weekly limit')}
-          {!p.noData && p.pct < 100 && <Box key="week-gap" height={1} />}
-          {!p.noData && p.pct < 100 && dayColumns(p)}
-          {showsToday(p) && <Box key="today-gap" height={1} />}
-          {showsToday(p) && titleRow('today-title', 'Today', `day ends ${hm(p.dayEnd)}`)}
-          {showsToday(p) && <Text key="today-head" bold color={d.bad ? 'claude' : undefined}>{d.predicted}</Text>}
-          {showsToday(p) && hbar('today-bar', p.usedOfBudget, p.predicted, d.bad)}
-          {showsToday(p) && barLabels('today-labels', [
-            <Text key="u">{d.used}</Text>,
-            ...(d.pred ? [<Text key="p" dimColor>{`· ${d.pred}`}</Text>] : []),
-          ], `100% = today’s budget, ${one(p.budget)}% of the week`)}
-        </Box>
-      )
+      const hd = weekHeadline(p), L = weekBarLabels(p)
+      const bar = p.noData ? null : hbar('week-bar', p.pct, L.add === null ? null : p.pct + toCome(p))
+      return termCard('week', [
+        titleRow('week-title', 'This week', hd.badge ? `${hd.head} ${hd.badge}` : hd.head, hd.tone),
+        bar && bar.bar,
+        bar && barFoot('week-foot', bar.missing, `resets ${dayTime(p.resetsAt)}`),
+        !p.noData && p.pct < 100 && dayColumns(p),
+      ])
     }
-    // the 5-hour card: the head, then the window's use as a bar
+    // today against its budget, laid out as the 5-hour card
+    const todayCardTerm = (p: WeekPlan) => {
+      const at = overBudgetAt(p)
+      const head = at === null ? 'Within budget' : at <= p.now ? 'Over budget' : `Over budget ~${hm(at)}`
+      const bar = hbar('today-bar', p.usedOfBudget, p.predicted > p.usedOfBudget + 0.05 ? p.predicted : null)
+      return termCard('today', [
+        titleRow('today-title', 'Today', head, at === null ? 'good' : 'bad'),
+        bar.bar,
+        bar.missing.length ? barFoot('today-foot', bar.missing, '') : null,
+      ])
+    }
+    // the 5-hour card: its headline, then the window's use as a bar
     const fiveCardTerm = (m: Model) => {
-      const hd = fiveHead(m, now), cut = m.noData ? null : cutOff(m, now)
-      const proj = 100 - m.arrive, add = Math.max(0, proj - m.pct), over = proj > 100
-      return (
-        <Box key="block-five" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
-          {titleRow('five-title', '5-hour window', `opened ${hm(m.resetsAt - 5 * HOUR)} · resets ${hm(m.resetsAt)}`)}
-          <Box key="five-head" flexDirection="row" flexWrap="wrap" columnGap={1}>
-            <Text bold dimColor={hd.tone === 'dim'} color={hd.tone === 'dim' ? undefined : 'claude'}>{hd.head}</Text>
-            {!m.noData && !over && <Text>·</Text>}
-            {!m.noData && !over && <Text bold color="success">{`${Math.round(m.arrive)}% to spare`}</Text>}
-          </Box>
-          {!m.noData && hbar('five-bar', m.pct, proj, over)}
-          {!m.noData && barLabels('five-labels', [
-            <Text key="u">{`${one(m.pct)}% used`}</Text>,
-            ...(add > 0 ? [<Text key="a" color={over ? 'claude' : undefined} dimColor={!over}>{`· +${one(add)}% at this pace${over && cut !== null ? `, cut off ~${hm(cut)}` : ''}`}</Text>] : []),
-          ], '100% = 5-hour limit')}
-        </Box>
-      )
+      const hd = fiveHead(m, now), proj = 100 - m.arrive, cut = m.noData ? null : cutOff(m, now)
+      const bar = m.noData ? null : hbar('five-bar', m.pct, proj > m.pct ? proj : null)
+      // the short headline: the reset's time is under the bar
+      const head = m.noData || m.pct >= 100 ? hd.head : cut !== null ? `Cut off ~${hm(cut)}` : 'Lasts to the reset'
+      return termCard('five', [
+        titleRow('five-title', '5-hour window', head, hd.tone),
+        bar && bar.bar,
+        bar && barFoot('five-foot', bar.missing, `resets ${hm(m.resetsAt)}`),
+      ])
     }
     const detailsButton = (key: string) => (
       <Button key={`details-btn-${key}`} plain dimColor label={open.includes(key) ? 'Hide details' : 'Details'} onPress={() => toggle(key)} />
@@ -1053,7 +1066,6 @@ export const register: Register = (on, options) => {
           <Text bold>Models</Text>
           {periodButtons}
         </Box>
-        {split && <Text key="models-frame" dimColor>{split.kind === 'five' ? '100% = 5-hour limit' : '100% = weekly limit'}</Text>}
         {split && modelBar(split)}
         {split && split.models.map(m => (
           <Box key={`ml-${m.id}`} flexDirection="row" justifyContent="space-between" columnGap={2}>
@@ -1077,6 +1089,7 @@ export const register: Register = (on, options) => {
     return (
       <Box key="cards" flexDirection="column">
         {plan ? weekCardTerm(plan) : <Text dimColor>No weekly limit reported.</Text>}
+        {plan && showsToday(plan) && todayCardTerm(plan)}
         {five ? fiveCardTerm(five) : <Text dimColor>No current 5-hour window seen: it shows after your next response.</Text>}
         {modelsCard}
         {syncRow(sync)}

@@ -22,7 +22,7 @@ export type RangeStep = [t: number, model: string, effort: string, units: number
  * the finer unit, the model the others' costs compare to (a model id; absent, the default), and whether the
  * weekly card's daily budget outlines are hidden.
  */
-export type RangeSettings = { mode: 'window' | 'reset'; n: number; unit: 'h' | 'd' | 'w'; fine: boolean; baseline?: string; hideBudget?: boolean }
+export type RangeSettings = { mode: 'window' | 'reset'; n: number; unit: 'h' | 'd' | 'w'; fine: boolean; baseline?: string }
 
 /** The colours the card draws with, as hex. */
 export type Palette = {

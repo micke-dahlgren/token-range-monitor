@@ -342,20 +342,18 @@ const colorOf = (f: Family) => (f === 'other' ? C.muted : C[f])
 
 /** The models card's head, `width` wide: its header, with the frame of the split under it on the right. */
 export function modelsHead(sp: UsageSplit | null, width: number, pal: Palettes = DEFAULT_PALETTES): string {
-  const head = cardHeader('model', 'Models', 'Where your usage went', sp ? [{ s: sp.kind === 'five' ? 'This 5-hour window' : 'This week' }] : [], width)
+  const head = cardHeader('model', 'Models', sp ? [{ s: sp.kind === 'five' ? 'This 5-hour window' : 'This week' }] : [], width)
   return drawing(head.svg, Math.ceil(head.y + 4), pal)
 }
 
 /**
- * The split, `width` wide: its frame, one stacked bar on the limit's scale (each model in its colour, what wasn't
+ * The split, `width` wide: one stacked bar on the limit's scale (each model in its colour, what wasn't
  * recorded hatched, what's unused faint), then a row per model with its figure and a chip per effort, and the
  * not-recorded row.
  */
 export function modelsUsage(sp: UsageSplit, width: number, pal: Palettes = DEFAULT_PALETTES): string {
   let s = `<defs><pattern id="nr" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" style="fill:${C.raised}"/><rect width="2" height="5" style="fill:${C.faint}"/></pattern></defs>`
-  let y = SIZE.meta * 1.15
-  s += t(0, y, splitFrame(sp), { size: SIZE.meta, fill: C.muted })
-  y += 10
+  let y = 4
   // the bar: models, then not recorded, then unused, 2px apart
   const parts = [...sp.models.map(m => ({ v: m.pct, fill: colorOf(m.family) })), { v: sp.notRecorded, fill: 'url(#nr)' }].filter(x => x.v >= 0.05)
   const H = 14

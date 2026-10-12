@@ -43,7 +43,7 @@ claude plugin update token-range-monitor
 
 - The head: "About 6% left at the reset", or "Runs out Wed ~12:45, 22h before the reset", and what that's based on: "At your pace over the last 7 whole days: 13.5% a day". When the projection has typically missed by more than 5 points, a **±12 pts** badge follows it, with the range it makes in words.
 - The whole week as one bar: what's used, solid, and what your pace adds before the reset, striped.
-- The days of this window side by side, each in % of your weekly limit: past days and today solid, later days striped at your pace. Today and the days after it are outlined at the **daily budget**, the most you can use each day and still reach the reset; **Show daily budget** turns the outlines off and on. Today turns red once it passes the budget.
+- The days of this window side by side, each in % of your weekly limit: past days and today solid, later days striped at your pace. Today and the days after it are outlined at the **daily budget**, the most you can use each day and still reach the reset. Today turns red once it passes the budget.
 
 **Today** (100% = today's budget), on the same card:
 
@@ -67,7 +67,7 @@ Open the pane with `/token-range`. You can also set the Details chart's window f
 
 Each limit's percentage and reset time arrive with Claude's responses, and the mod records them.
 
-**Days.** A day is 24 hours from the weekly reset's time of day, so days line up with the week. A day's use is how far the weekly figure rose in it, usage from elsewhere included.
+**Days.** Days are calendar days, midnight to midnight in your time zone. When the weekly reset falls mid-day, the week's first and last days are part days: from the reset's time on the first, and up to it on the last. A part day counts at its share of a day's pace, and today's budget is what's left spread evenly over the time to the reset. A day's use is how far the weekly figure rose in it, usage from elsewhere included.
 
 **The weekly projection:**
 
@@ -82,7 +82,7 @@ So the figure only moves when you use Claude beyond today's expected use, or whe
 
 **Daily budget** = what was left at the start of today ÷ the days left in the window, today included. It changes only when a day ends.
 
-**Self-check.** At each day boundary the mod notes what it projected. When the window resets it compares those with what was actually left. When the typical miss over the last 4 windows is more than 5 points, the figure shows `±` that miss.
+**Self-check.** At the start of each day the mod notes what it projected. When the window resets it compares those with what was actually left. When the typical miss over the last 4 windows is more than 5 points, the figure shows `±` that miss.
 
 **Just after you install,** until a whole day is on record, the weekly figure is the older estimate (used so far ÷ hours since the reset, kept up to the reset), tagged **early**. It needs 6 hours after the reset; before that it shows **No data**.
 

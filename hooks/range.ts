@@ -711,7 +711,6 @@ export type ChartSpec = {
    * bar unit, and a long and a short label.
    */
   blocks: Array<{ f0: number; f1: number; rate: number; label: string; short: string }>
-  unitLabel: string
   /** The theme's palettes; absent, the default dark theme's. */
   palettes?: Palettes
 }
@@ -725,7 +724,7 @@ export type ChartSpec = {
 export function chartSvg(c: ChartSpec): string {
   const est = c.width, Hh = c.height
   const ax = px('axis')
-  const padT = Math.ceil(ax * 1.5 + 12), padB = Math.ceil(ax * 1.5 + 12)
+  const padT = Math.ceil(ax * 0.8 + 6), padB = Math.ceil(ax * 1.5 + 12)
   const peak = Math.max(...c.bars, c.avg ?? 0, ...c.blocks.map(b => b.rate), 0.0001) * 1.04
   const top = peak >= 10 ? Math.ceil(peak / 2) * 2 : peak
   const Y = (v: number) => Hh - padB - Math.min(v, top) / top * (Hh - padT - padB)
@@ -737,7 +736,6 @@ export function chartSvg(c: ChartSpec): string {
     <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${C.barTop}"/><stop offset="1" style="stop-color:${C.barBottom}"/></linearGradient>
     <linearGradient id="plot" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:${C.dim}" stop-opacity="0"/><stop offset="1" style="stop-color:${C.dim}" stop-opacity="0.07"/></linearGradient>
   </defs>`
-  s += text(2, padT - ax * 0.6, c.unitLabel)
   s += `<rect x="0" y="${padT}" width="100%" height="${base - padT}" rx="6" fill="url(#plot)"/>`
   for (const g of [top / 4, top / 2, top * 3 / 4]) {
     s += `<line x1="0" x2="100%" y1="${Y(g)}" y2="${Y(g)}" style="stroke:${C.dim}" stroke-opacity="0.18"/>`
@@ -1001,7 +999,6 @@ function knownBlocks(m: Model, now: number, perHours: number): ChartSpec['blocks
 function timeChart(m: Model, now: number, width: number, height: number, palettes: Palettes): string {
   const isWeek = m.kind === 'week'
   const values = bars(m, now, bucketMinutes(m.winH * 60), isWeek ? 24 : 1)
-  const barMin = m.winH * 60 / values.length
   const ago = (h: number) => h >= 48 ? `−${Math.round(h / 24)}d` : h >= 2 ? `−${Math.round(h)}h` : `−${Math.round(h * 60)}m`
   // the axis keeps one unit across, picked by the window's length
   const tick = (h: number) => m.winH >= 48 ? `−${fx(h / 24, h / 24 < 10 && h % 24 ? 1 : 0)}d`
@@ -1020,6 +1017,5 @@ function timeChart(m: Model, now: number, width: number, height: number, palette
     unrecorded: m.before ? 0 : Math.min(1, Math.max(0, (m.recordedFrom - m.from) / (now - m.from))),
     blocks: knownBlocks(m, now, perHours),
     palettes,
-    unitLabel: `% per ${isWeek ? 'day' : 'hour'} · bar = ${barMin >= 60 ? dur(barMin / 60) : `${Math.max(1, Math.round(barMin))}m`}`,
   })
 }

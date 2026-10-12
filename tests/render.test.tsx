@@ -64,14 +64,10 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   expect(await weekAlt()).toMatch(/Today, 100% = today's budget\. Predicted use today: [\d.]+% of daily budget\./)
   // no comparison with the previous release
   expect(await pane.find({ type: 'Text', text: /^1\.3 shows/ })).toBeUndefined()
-  // the daily budget's outlines switch off and on, and the switch says which
+  // the daily budget is always outlined, with no switch for it
   const weekSource = async () => String((await pane.findAll({ type: 'Svg' })).find(x => String(x.props.alt).startsWith('This week, '))?.props.source)
   expect(await weekSource()).toMatch(/fill="none" style="stroke:var\(--muted\)"/)
-  await pane.press({ key: 'budget-toggle' })
-  expect((await pane.find({ key: 'budget-toggle' }))?.props.label).toBe('☐ Show daily budget')
-  expect(await weekSource()).not.toMatch(/fill="none" style="stroke:var\(--muted\)"/)
-  await pane.press({ key: 'budget-toggle' })
-  expect((await pane.find({ key: 'budget-toggle' }))?.props.label).toBe('☑ Show daily budget')
+  expect(await pane.find({ key: 'budget-toggle' })).toBeUndefined()
   // "Expand all details" opens every card's Details at once; again, closes them
   await pane.press({ key: 'expand-all' })
   for (const k of ['week', 'five', 'models']) expect((await pane.find({ key: `details-btn-${k}` }))?.props.label).toBe('Hide details ▴')
@@ -202,17 +198,20 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
   expect((await desk.find({ type: 'Button', key: 'details-btn-five' }))?.props.label).toBe('Hide details ▴')
   await desk.unmount()
 
-  // the terminal: each card's bars, each bar saying what its 100% is
+  // the terminal: each card's headline on its title line, its bars carrying their own figures, no "100% =" labels
   const term = await $.ui.mount({ plugin: 'token-range-monitor', surface: 'terminal', ...PANE })
-  expect(await term.find({ type: 'Text', text: '100% = weekly limit' })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: /^Predicted use today: [\d.]+% of daily budget$/ })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: /^100% = today’s budget, [\d.]+% of the week$/ })).toBeDefined()
-  expect(await term.find({ type: 'Text', text: '100% = 5-hour limit' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /100% =/ })).toBeUndefined()
+  expect(await term.find({ type: 'Text', text: /at this pace/ })).toBeUndefined()
   expect(await term.find({ key: 'week-bar' })).toBeDefined()
   expect(await term.find({ key: 'week-days' })).toBeDefined()
+  expect(await term.find({ key: 'today-bar' })).toBeDefined()
   expect(await term.find({ key: 'five-bar' })).toBeDefined()
+  // the week's bar: what's used in its solid part, where the pace ends up in its shaded part
+  expect(await term.find({ type: 'Text', text: /^ *\d+(\.\d)?% *$/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^▒* ~\d+(\.\d)?% ▒*$/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^resets \w{3} \d\d:\d\d$/ })).toBeDefined()
   // compact: the cards keep their border but drop the desktop's padding rows and gaps
-  for (const k of ['week', 'five', 'models']) {
+  for (const k of ['week', 'today', 'five', 'models']) {
     const card = await term.find({ key: `block-${k}` })
     expect(card?.props.padding).toBeUndefined()
     expect(card?.props.gap).toBe(0)
