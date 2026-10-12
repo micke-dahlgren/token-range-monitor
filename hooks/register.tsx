@@ -16,7 +16,8 @@ import {
   showsToday, toCome, todaySvg, todayText, weekBarLabels, weekCardSvg, weekHead, weekHeadline, weekLegendSvg, weekPart,
 } from './cards'
 import type { Run } from './ui'
-import { baselineOf, costWord, learn, mergeSteps, MODELS_INFO, modelsCosts, modelsHead, modelsSpend, modelsText, shortNames, spend, units } from './models'
+import { baselineOf, costRows, learn, mergeSteps, MODELS_INFO, modelsHead, modelsUsage, shortNames, shownEffort, splitText, units, usageSplit } from './models'
+import type { UsageSplit } from './models'
 import {
   agoText, cancelSignIn, cleanName, configureSync, DEVICE_KEY, DEVICES_FRESH, deleteSynced, deviceLabel, downloadedFor, endSync, GENERIC_NAMES, isDeviceId,
   NAME_KEY, platformOf, refreshDevices, removeDevice, signIn, signOut, startSync, syncTick,
@@ -518,9 +519,15 @@ async function models($: EngineInterface) {
   // 1.4's weekly projection: the last 7 whole days, today at no less than its expected use
   const totals = dailyTotals(list, watched, now, await read($, days))
   const plan = weekPlan(list, watched, totals, now, typicalMiss(await read($, check)))
+  const five = shaped(project(list, 'five', now, fiveAvg, watched))
+  // each limit's window by model and effort, each response weighed as the bars weigh it
+  const weigh = (id: string) => weightOf.get(id) ?? usual
+  const splits = {
+    five: five ? usageSplit(five, list, stepList, watched, weigh, now) : null,
+    week: projected ? usageSplit(projected, list, stepList, watched, weigh, now) : null,
+  }
   return {
-    now, s, weekRecorded, pal, week, plan, totals,
-    five: shaped(project(list, 'five', now, fiveAvg, watched)),
+    now, s, weekRecorded, pal, week, plan, totals, five, splits,
     // how each limit's previous window ended, where the record can tell
     lastWeek: lastWindow(list, 'week', now, watched),
     lastFive: lastWindow(list, 'five', now, watched),
@@ -649,7 +656,7 @@ export const register: Register = (on, options) => {
             ...(i ? [<Text key={`sep-${key}`} dimColor>·</Text>] : []),
             <Box key={`band-${key}`} flexDirection="row">
               <Text dimColor>{p.label} </Text>
-              <Text bold dimColor={p.dim} color={p.dim ? undefined : !p.bad && p.value.includes('to spare') ? 'success' : 'claude'}>{p.value}</Text>
+              <Text bold dimColor={p.dim} color={p.dim ? undefined : p.spare ? 'success' : 'claude'}>{p.value}</Text>
               {p.rest && <Text dimColor>{p.rest}</Text>}
               {p.tag && <Text key={`tag-${key}`} dimColor>{` ${p.tag}`}</Text>}
             </Box>,
@@ -676,7 +683,7 @@ export const register: Register = (on, options) => {
 
   // B: the side pane
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, steps: stepList, plan, totals } = await models($)
+    const { now, s, week, five, pal, lastWeek, lastFive, weekRecorded, learned, plan, totals, splits } = await models($)
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const sync = await read($, syncView)
@@ -728,14 +735,41 @@ export const register: Register = (on, options) => {
       </Box>
     ) : null
 
-    // the models card: each model's cost against the baseline, and this week's points by model and effort
+    // the models card: where this window's use went, by model and effort, for the limit that's tighter unless one is picked
     const base = baselineOf(learned, s.baseline)
-    const sp = week ? spend(week, learned, stepList, now) : null
     const shown = learned.models.filter(m => m.shown)
     const names = shortNames(shown)
+    const tightness = (k: 'five' | 'week') => k === 'five'
+      ? (five ? (five.over ? -1 : five.arrive) : Infinity)
+      : (plan ? (plan.pct >= 100 || plan.runsOutAt !== null ? -1 : plan.left) : Infinity)
+    const picked = open.includes('models-period:five') ? 'five' : open.includes('models-period:week') ? 'week' : null
+    const period: 'five' | 'week' = picked ?? (tightness('five') < tightness('week') ? 'five' : 'week')
+    const split: UsageSplit | null = splits[period] ?? splits[period === 'five' ? 'week' : 'five']
+    const pickPeriod = (k: 'five' | 'week') => void update($, details, l => [...l.filter(x => !x.startsWith('models-period:')), `models-period:${k}`])
+    const periodButtons = (
+      <Box key="models-period" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap={gap}>
+        {seg('period-five', '5h', split?.kind === 'five', () => pickPeriod('five'), !splits.five)}
+        {seg('period-week', 'Week', split?.kind === 'week', () => pickPeriod('week'), !splits.week)}
+      </Box>
+    )
     const modelsOpen = open.includes('models')
-    const modelsSummary = learned.models.length === 0 ? 'Learning from your responses.'
-      : learned.models.map(m => `${names.get(m.id) ?? m.name} ${costWord(m, base)}`).join(' · ')
+    const modelsSummary = !split ? 'No limit reported yet.'
+      : split.models.length ? split.models.slice(0, 3).map(m => `${names.get(m.id) ?? m.name} ${one(m.pct)}%`).join(' · ')
+      : 'Nothing used yet this window.'
+    // the costs as a small table: name, figure, where the figure comes from
+    const rowsOfCost = costRows(learned, base)
+    const costTable = (
+      <Box key="models-costs" flexDirection="column">
+        <Text dimColor>{rowsOfCost.length ? 'Token cost, per token' : 'Costs compare once two models have been used.'}</Text>
+        {rowsOfCost.map(r => (
+          <Box key={`cost-${r.id}`} flexDirection="row" columnGap={2}>
+            <Box width={12} flexShrink={0}><Text>{r.name}</Text></Box>
+            <Box width={7} flexShrink={0}><Text bold>{r.x}</Text></Box>
+            <Text dimColor>{r.note}</Text>
+          </Box>
+        ))}
+      </Box>
+    )
     const compareRow = base && (
       <Box key="compare" flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={1} rowGap={gap}>
         <Text color="inactive">Compare with</Text>
@@ -839,14 +873,15 @@ export const register: Register = (on, options) => {
       }) : <Text key="no-five" dimColor>No current 5-hour window seen: it shows after your next response.</Text>
 
       const modelsCard = card('models', [
-        draw('models-head', modelsHead(learned, base, now, W, pal), `Models, ${learned.since === null ? 'learning' : 'learned from your usage'}: ${modelsSummary}`),
+        draw('models-head', modelsHead(split, W, pal), `Models: where your usage went. ${modelsSummary}`),
+        periodButtons,
+        split && draw('models-usage', modelsUsage(split, W, pal), splitText(split)),
       ], {
         detailsKey: 'models',
-        summary: <Text key="summary-models" color="inactive">Relative token cost & weekly usage</Text>,
+        summary: <Text key="summary-models" color="inactive">Token cost per model</Text>,
         inner: () => [
-          draw('models-costs', modelsCosts(learned, base, W, pal), `Models. ${modelsText(learned, base, null).join(' ')}`),
+          costTable,
           compareRow,
-          sp && draw('models-spend', modelsSpend(sp, W, pal), modelsText({ ...learned, models: [] }, null, sp).join(' ')),
           <Text key="models-info" dimColor>{MODELS_INFO}</Text>,
         ],
       })
@@ -984,20 +1019,50 @@ export const register: Register = (on, options) => {
     const detailsButton = (key: string) => (
       <Button key={`details-btn-${key}`} plain dimColor label={open.includes(key) ? 'Hide details' : 'Details'} onPress={() => toggle(key)} />
     )
-    // the models card: the name and the summary on one line, the rest behind Details
+    // the models card: the split as one bar of each model's share, a line per model under it, the costs behind Details
+    const modelBar = (sp: UsageSplit) => {
+      const n = inner, colour = (f: string) => (f === 'fable' ? 'claude' : f === 'opus' ? 'claude' : f === 'sonnet' ? 'suggestion' : 'inactive')
+      let used = 0
+      const segsOf = sp.models.map((m, i) => {
+        const c = Math.round(n * m.pct / 100)
+        used += c
+        return <Text key={`mb-${i}`} color={colour(m.family)} dimColor={i % 2 === 1}>{(i % 2 ? '▓' : '█').repeat(c)}</Text>
+      })
+      const nr = Math.min(n - used, Math.round(n * sp.notRecorded / 100))
+      return (
+        <Box key="models-bar" flexDirection="row">
+          {segsOf}
+          <Text color="subtle">{'▒'.repeat(Math.max(0, nr))}</Text>
+          <Text color="subtle">{'░'.repeat(Math.max(0, n - used - nr))}</Text>
+        </Box>
+      )
+    }
     const modelsCard = (
       <Box key="block-models" flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">
-        <Box key="models-compact" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
-          <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-            <Text bold>Models</Text>
-            <Text key="models-summary" color="inactive">{modelsSummary}</Text>
-          </Box>
-          {detailsButton('models')}
+        <Box key="models-title" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+          <Text bold>Models</Text>
+          {periodButtons}
         </Box>
-        {modelsOpen && modelsText(learned, base, sp).map((line, i) => <Text key={`models-line-${i}`} dimColor>{line}</Text>)}
+        {split && <Text key="models-frame" dimColor>{split.kind === 'five' ? '100% = 5-hour limit' : '100% = weekly limit'}</Text>}
+        {split && modelBar(split)}
+        {split && split.models.map(m => (
+          <Box key={`ml-${m.id}`} flexDirection="row" justifyContent="space-between" columnGap={2}>
+            <Text>{(() => { const ef = shownEffort(m); return `${m.name}${ef.length > 1 || (ef[0] && ef[0][0] !== 'default') ? `  ${ef.map(([e, v]) => `${e} ${one(v)}%`).join(' · ')}` : ''}` })()}</Text>
+            <Text bold>{`${one(m.pct)}%`}</Text>
+          </Box>
+        ))}
+        {split && split.notRecorded >= 0.05 && (
+          <Box key="ml-nr" flexDirection="row" justifyContent="space-between" columnGap={2}>
+            <Text dimColor>Not recorded</Text>
+            <Text dimColor>{`${one(split.notRecorded)}%`}</Text>
+          </Box>
+        )}
+        <Box key="models-foot" flexDirection="row" justifyContent="flex-end">{detailsButton('models')}</Box>
+        {modelsOpen && costTable}
         {modelsOpen && compareRow}
       </Box>
     )
+
     return (
       <Box key="cards" flexDirection="column">
         {plan ? weekCardTerm(plan) : <Text dimColor>No weekly limit reported.</Text>}

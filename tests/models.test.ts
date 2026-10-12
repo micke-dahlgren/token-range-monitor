@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading, RangeStep } from '../types'
 import { DAY, HOUR, MIN, project } from '../hooks/range'
-import { baselineOf, learn, modelName, modelsCosts, modelsSpend, modelsText, ratio, shortNames, spend, units } from '../hooks/models'
+import { baselineOf, costRows, learn, listPrice, modelName, modelsUsage, ratio, shortNames, splitText, units, usageSplit } from '../hooks/models'
 
 const T0 = Date.UTC(2026, 9, 9, 15, 0)
 const reset = T0 + 2 * DAY
@@ -50,59 +50,74 @@ test('tokens are weighted at the price ratios', async () => {
   expect(units({ input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 40, cache_read_input_tokens: 1000 })).toBe(100 + 50 + 50 + 100)
 })
 
-test('each model’s cost is learned from the ticks, and shows once it is sure enough', async () => {
+test('each model starts at its list price', async () => {
+  expect(listPrice('claude-fable-5-1')! / listPrice('claude-opus-5-5')!).toBe(2.5)
+  expect(listPrice('claude-sonnet-5-5')! / listPrice('claude-opus-5-5')!).toBe(0.5)
+  // a version not listed takes its family's newest price; a model of no known family has none
+  expect(listPrice('claude-opus-9')).toBe(listPrice('claude-opus-5-5'))
+  expect(listPrice('some-other-model')).toBe(null)
+})
+
+test('each model’s cost is learned from the ticks, from its list price on', async () => {
   const W = { 'claude-opus-5-5': 5, 'claude-sonnet-5-5': 1, 'claude-haiku-5-5': 0.3 }
   // long runs of one model, now and then a Haiku response
   const { steps, readings, seen } = history(W, i => (i % 97 === 0 ? 'claude-haiku-5-5' : Math.floor(i / 40) % 2 ? 'claude-opus-5-5' : 'claude-sonnet-5-5'))
   const l = learn(readings, steps, seen, T0)
   const [opus, sonnet, haiku] = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'].map(id => l.models.find(m => m.id === id)!)
   expect(l.models.map(m => m.name)).toEqual(['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'])
-  expect(opus!.shown).toBe(true)
-  expect(sonnet!.shown).toBe(true)
-  // the rare model is still learning, and says how far it has to go
-  expect(haiku!.shown).toBe(false)
-  expect(haiku!.more).toBeGreaterThan(0)
-  // learned off the 5-hour figure, exchanged to weekly points at the account's own rate
-  expect(Math.abs(l.perWeek! - FIVE)).toBeLessThan(0.5)
+  // every model has a weight; the two used most are learned from the data, against their list prices (2:1)
+  expect(l.models.every(m => m.shown)).toBe(true)
+  expect(opus!.prior).toBe(false)
+  expect(sonnet!.prior).toBe(false)
   const r = opus!.w / sonnet!.w
-  expect(r).toBeGreaterThan(4.3)
+  expect(r).toBeGreaterThan(4)
   expect(r).toBeLessThan(5.7)
+  expect(Math.abs(l.perWeek! - FIVE)).toBeLessThan(0.5)
 
-  // the baseline is Sonnet by default, any shown model when picked
-  expect(baselineOf(l, undefined)).toBe(sonnet)
-  expect(baselineOf(l, 'claude-opus-5-5')).toBe(opus)
+  // the baseline is the model known most precisely, any shown model when picked
+  expect([opus, sonnet]).toContain(baselineOf(l, undefined))
+  expect(baselineOf(l, 'claude-haiku-5-5')).toBe(haiku)
   expect(ratio(sonnet!, opus!).x).toMatch(/^0\.\d\d×$/)
   expect(shortNames([opus!, sonnet!]).get('claude-opus-5-5')).toBe('Opus')
+  const rows = costRows(l, opus!)
+  expect(rows[0]).toMatchObject({ name: 'Opus 5.5', x: '1×', note: 'baseline' })
+  expect(rows[1]).toMatchObject({ name: 'Sonnet 5.5' })
+  expect(rows[1]!.x).toMatch(/^0\.\d\d×$/)
+  expect(rows[1]!.note).toMatch(/^likely /)
 
-  // this week's points split by model and effort, adding up to what was recorded
+  // this week's use by model and effort, adding up to the limit with what wasn't recorded and what's unused
   const week = project(readings, 'week', T0, { type: 'reset' }, seen)!
-  const sp = spend(week, l, steps, T0)
-  expect(sp.models.map(m => m.cost.name)).toEqual(['Opus 5.5', 'Sonnet 5.5'])
+  const weightOf = (id: string) => l.models.find(m => m.id === id)?.w ?? 0
+  const sp = usageSplit(week, readings, steps, seen, weightOf, T0)
+  expect(sp.models.slice(0, 2).map(m => m.name)).toEqual(['Opus 5.5', 'Sonnet 5.5'])
   expect(sp.models[0]!.effort.map(e => e[0])).toEqual(['high', 'max'])
-  const split = sp.models.reduce((s, m) => s + m.pts, 0)
-  expect(Math.abs(split + sp.unsplit + sp.away - week.pct)).toBeLessThan(week.pct * 0.15)
-
-  const svg = modelsCosts(l, sonnet!, 600) + modelsSpend(sp, 600)
-  expect(svg).not.toMatch(/ [xy]=""/)
+  const total = sp.models.reduce((t, m) => t + m.pct, 0) + sp.notRecorded + sp.unused
+  expect(Math.abs(total - 100)).toBeLessThan(0.01)
+  expect(splitText(sp)).toMatch(/^This week · 100% = your weekly limit: Opus 5\.5 [\d.]+% \(high /)
+  const svg = modelsUsage(sp, 600)
+  expect(svg).not.toMatch(/NaN|undefined| [xy]=""/)
   expect(svg).toContain('Opus 5.5')
-  expect(modelsText(l, sonnet!, sp).join(' ')).toMatch(/Opus 5\.5: [\d.]+× Sonnet 5\.5/)
 })
 
-test('one model alone is known but has nothing to compare with', async () => {
+test('one model alone has a weight but nothing to compare with', async () => {
   const { steps, readings, seen } = history({ 'claude-opus-5-5': 5 }, () => 'claude-opus-5-5')
   const l = learn(readings, steps, seen, T0)
   expect(l.models[0]!.shown).toBe(true)
   expect(baselineOf(l, undefined)).toBe(null)
 })
 
-test('stretches nobody here watched teach nothing', async () => {
+test('stretches nobody here watched teach nothing: the list prices stand, and the use is not recorded', async () => {
   // a response every 20 minutes: each stretch between ticks is longer than a pause, so with nothing watched none counts
   const { steps, readings } = history({ 'claude-opus-5-5': 5, 'claude-sonnet-5-5': 1 }, i => (Math.floor(i / 10) % 2 ? 'claude-opus-5-5' : 'claude-sonnet-5-5'), 20 * MIN)
   const l = learn(readings, steps, [], T0)
   expect(l.since).toBe(null)
-  expect(l.models.every(m => !m.shown && m.rel === Infinity)).toBe(true)
-  // with nothing known, the week's recorded points all wait to be split
+  expect(l.models.every(m => m.shown && m.prior && m.rel === Infinity)).toBe(true)
+  const [opus, sonnet] = l.models
+  expect(opus!.w / sonnet!.w).toBe(2)
+  // with nothing watched, the week's use is all not recorded
   const week = project(readings, 'week', T0, { type: 'reset' }, [])!
-  expect(spend(week, l, steps, T0).models).toEqual([])
+  const sp = usageSplit(week, readings, steps, [], id => l.models.find(m => m.id === id)!.w, T0)
+  expect(sp.models).toEqual([])
+  expect(Math.abs(sp.notRecorded - Math.min(100, week.pct))).toBeLessThan(0.01)
   void HOUR
 })

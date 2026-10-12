@@ -31,11 +31,11 @@ export const one = (n: number) => (Math.round(n * 10) / 10).toFixed(1).replace(/
 
 // ---- the line above the prompt ----
 
-/** One limit's part of the line: as 1.3's, plus whether it reads as short, and a tag ("early"). */
-export type Part = BandPart & { bad: boolean; dim: boolean; tag?: string }
+/** One limit's part of the line: as 1.3's, plus whether it reads as short or as what's left at the reset, and a tag ("early"). */
+export type Part = BandPart & { bad: boolean; dim: boolean; spare?: boolean; tag?: string }
 
 /**
- * The week's part. Lasting: "6% to spare ±12, resets in 4d 13h" (narrow "+6% 4d 13h"). Short: "runs out
+ * The week's part. Lasting: "~6% left at reset ±12, in 4d 13h" (narrow "~6% @reset 4d 13h"). Short: "runs out
  * Wed ~12:45, 22h early" (narrow "out Wed 12:45"). Before a whole day is on record, 1.3's hourly figure
  * with the tag "early".
  */
@@ -55,14 +55,14 @@ export function weekPart(p: WeekPlan, short: boolean): Part {
   }
   const miss = p.miss ? ` ±${p.miss}` : ''
   return short
-    ? { label, value: `+${Math.max(0, Math.round(p.left))}%${miss}`, rest: ` ${dur(leftH)}`, bad: false, dim: false, ...tag }
-    : { label, value: `${spare(Math.max(0, p.left))}${miss}`, rest: `, resets in ${dur(leftH)}`, bad: false, dim: false, ...tag }
+    ? { label, value: `~${Math.max(0, Math.round(p.left))}% @reset${miss}`, rest: ` ${dur(leftH)}`, bad: false, dim: false, spare: true, ...tag }
+    : { label, value: `~${Math.max(0, Math.round(p.left))}% left at reset${miss}`, rest: `, in ${dur(leftH)}`, bad: false, dim: false, spare: true, ...tag }
 }
 
 /** When the 5-hour limit runs out at this pace (ms), or null when it lasts to the reset. */
 export const cutOff = (m: Model, now: number) => (m.over && !m.noData ? Math.round((now + m.runsOutIn * HOUR) / 60_000) * 60_000 : null)
 
-/** The 5-hour part, in clock times: "cut off ~00:09, resets 00:40" or "55% to spare, resets 15:40" (narrow "out 00:09", "+55% 15:40"). */
+/** The 5-hour part, in clock times: "cut off ~00:09, resets 00:40" or "~55% left at 15:40" (narrow "out 00:09", "~55% @15:40"). */
 export function fivePart(m: Model, now: number, short: boolean): Part {
   const label = '5h'
   if (m.noData) return { label, value: 'No data', rest: '', bad: false, dim: true }
@@ -72,8 +72,8 @@ export function fivePart(m: Model, now: number, short: boolean): Part {
     ? { label, value: `out ${hm(cut)}`, rest: '', bad: true, dim: false }
     : { label, value: `cut off ~${hm(cut)}`, rest: `, resets ${hm(m.resetsAt)}`, bad: true, dim: false }
   return short
-    ? { label, value: `+${Math.round(m.arrive)}%`, rest: ` ${hm(m.resetsAt)}`, bad: false, dim: false }
-    : { label, value: spare(m.arrive), rest: `, resets ${hm(m.resetsAt)}`, bad: false, dim: false }
+    ? { label, value: `~${Math.max(0, Math.round(m.arrive))}% @${hm(m.resetsAt)}`, rest: '', bad: false, dim: false, spare: true }
+    : { label, value: `~${Math.max(0, Math.round(m.arrive))}% left at ${hm(m.resetsAt)}`, rest: '', bad: false, dim: false, spare: true }
 }
 
 /** About how many cells the line takes: the parts, their tags, the " · " between them, and the Details button. */

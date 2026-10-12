@@ -27,8 +27,8 @@ test('the 5-hour part reads in clock times: a cut-off, lasting to the reset, a r
 
   // 3% in 20 minutes lasts: 9% an hour for the 4h 40m left
   const calm = five(at(11, 10, 40), at(11, 11), 3)
-  expect(fivePart(calm, at(11, 11), false)).toMatchObject({ value: '55% to spare', rest: ', resets 15:40', bad: false })
-  expect(fivePart(calm, at(11, 11), true)).toMatchObject({ value: '+55%', rest: ' 15:40' })
+  expect(fivePart(calm, at(11, 11), false)).toMatchObject({ value: '~55% left at 15:40', rest: '', bad: false, spare: true })
+  expect(fivePart(calm, at(11, 11), true)).toMatchObject({ value: '~55% @15:40', rest: '' })
   expect(fiveHead(calm, at(11, 11)).head).toBe('Lasts to the reset at 15:40')
 
   // opened 19:40, read at 22:00 with 52% used: out after midnight, at 00:09, the reset at 00:40
@@ -62,11 +62,11 @@ const plan = (o: Partial<WeekPlan> = {}): WeekPlan => ({
   budget: 14.6, predicted: 13.5 / 14.6 * 100, usedOfBudget: 12 / 14.6 * 100, miss: null, noData: null, ...o,
 })
 
-test('the week part: to spare, with its range, running out, and early before a whole day is on record', () => {
-  expect(weekPart(plan(), false)).toMatchObject({ label: 'Week', value: '6% to spare', rest: ', resets in 3d 19h', bad: false })
-  expect(weekPart(plan(), true)).toMatchObject({ value: '+6%', rest: ' 3d 19h' })
-  expect(weekPart(plan({ miss: 12 }), false).value).toBe('6% to spare ±12')
-  expect(weekPart(plan({ miss: 12 }), true).value).toBe('+6% ±12')
+test('the week part: left at the reset, with its range, running out, and early before a whole day is on record', () => {
+  expect(weekPart(plan(), false)).toMatchObject({ label: 'Week', value: '~6% left at reset', rest: ', in 3d 19h', bad: false, spare: true })
+  expect(weekPart(plan(), true)).toMatchObject({ value: '~6% @reset', rest: ' 3d 19h' })
+  expect(weekPart(plan({ miss: 12 }), false).value).toBe('~6% left at reset ±12')
+  expect(weekPart(plan({ miss: 12 }), true).value).toBe('~6% @reset ±12')
 
   const short = plan({ left: -20, runsOutAt: at(14, 12, 50), early: 22 })
   expect(weekPart(short, false)).toMatchObject({ value: 'runs out Wed ~12:45', rest: ', 22h early', bad: true })

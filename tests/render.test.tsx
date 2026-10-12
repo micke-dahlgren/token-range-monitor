@@ -37,8 +37,8 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   // the countdown is plain text: no unit to switch
   expect(await band.find({ key: 'reset-week' })).toBeUndefined()
   // 1.4: the week at the last whole days' pace, the 5-hour cut-off as a clock time
-  expect(await band.find({ type: 'Text', text: /^\d+% to spare$/ })).toBeDefined()
-  expect(await band.find({ type: 'Text', text: /^, resets in \d/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^~\d+% left at (reset|\d\d:\d\d)$/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^, in \d/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /^cut off ~\d\d:\d\d$/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /^, resets \d\d:\d\d$/ })).toBeDefined()
   await band.unmount()
@@ -72,20 +72,21 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   expect(await weekSource()).not.toMatch(/fill="none" style="stroke:var\(--muted\)"/)
   await pane.press({ key: 'budget-toggle' })
   expect((await pane.find({ key: 'budget-toggle' }))?.props.label).toBe('☑ Show daily budget')
-  // "Expand all details" opens every card's Details and Other at once; again, closes them
+  // "Expand all details" opens every card's Details at once; again, closes them
   await pane.press({ key: 'expand-all' })
   for (const k of ['week', 'five', 'models']) expect((await pane.find({ key: `details-btn-${k}` }))?.props.label).toBe('Hide details ▴')
-  expect((await pane.find({ key: 'other-toggle' }))?.props.label).toBe('▾ Other')
   expect((await pane.find({ key: 'expand-all' }))?.props.label).toBe('Collapse details')
   await pane.press({ key: 'expand-all' })
   for (const k of ['week', 'five', 'models']) expect((await pane.find({ key: `details-btn-${k}` }))?.props.label).toBe('Details ▾')
-  expect((await pane.find({ key: 'other-toggle' }))?.props.label).toBe('▸ Other')
-  // the models card follows the two limits' cards, still learning with no responses seen
-  // compact until its Details opens: a summary line, then the full card
-  expect((await pane.findAll({ type: 'Svg' })).some(x => /^Models, learning: Learning from your responses.$/.test(String(x.props.alt)))).toBe(true)
-  expect((await pane.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('Models.'))).toBe(false)
+  // the models card follows the two limits' cards: where the window's use went, one limit at a time, the costs behind Details
+  const alts = async () => (await pane.findAll({ type: 'Svg' })).map(x => String(x.props.alt))
+  expect((await alts()).some(a => a.startsWith('Models: where your usage went.'))).toBe(true)
+  expect((await alts()).some(a => /^This (week|5-hour window) · 100% = your (weekly|5-hour) limit: /.test(a))).toBe(true)
+  await pane.press({ key: 'period-week' })
+  expect((await alts()).some(a => a.startsWith('This week · 100% = your weekly limit: '))).toBe(true)
+  expect(await pane.find({ type: 'Text', text: /^(Token cost, per token|Costs compare)/ })).toBeUndefined()
   await pane.press({ key: 'details-btn-models' })
-  expect((await pane.findAll({ type: 'Svg' })).some(x => String(x.props.alt).startsWith('Models.'))).toBe(true)
+  expect(await pane.find({ type: 'Text', text: /^(Token cost, per token|Costs compare)/ })).toBeDefined()
   await pane.press({ key: 'details-btn-models' })
   // 1.3's card is behind the weekly card's Details: its head, chart and controls
   const oldHead = async () => (await pane.findAll({ type: 'Svg' })).map(x => String(x.props.alt)).find(a => a.startsWith('This week.'))
@@ -220,10 +221,11 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
   // the week and 5-hour cards have no Details in the terminal
   expect(await term.find({ type: 'Button', key: 'details-btn-week' })).toBeUndefined()
   expect(await term.find({ type: 'Button', key: 'details-btn-five' })).toBeUndefined()
-  // the models card is one line until its Details opens
-  expect(await term.find({ type: 'Text', text: /^This week \d+% used/ })).toBeUndefined()
+  // the models card draws its bar; the costs wait behind its Details
+  expect(await term.find({ key: 'models-bar' })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^(Token cost, per token|Costs compare)/ })).toBeUndefined()
   await term.press({ key: 'details-btn-models' })
-  expect(await term.find({ type: 'Text', text: /^This week \d+% used/ })).toBeDefined()
+  expect(await term.find({ type: 'Text', text: /^(Token cost, per token|Costs compare)/ })).toBeDefined()
   await term.unmount()
 
   // the band above the prompt doesn't show it

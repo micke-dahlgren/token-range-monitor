@@ -28,13 +28,13 @@ claude plugin update token-range-monitor
 
 **Above the prompt**, one line:
 
-> Week **6% to spare**, resets in 4d 13h · 5h **cut off ~00:09**, resets 00:40 · Details ↗
+> Week **~6% left at reset**, in 4d 13h · 5h **cut off ~00:09**, resets 00:40 · Details ↗
 
-- **Week:** what's projected to be left at the weekly reset, in green: **6% to spare**. If you won't make it, it says in Claude's orange when you'd run out and how long before the reset: **runs out Wed ~12:45**, 22h early.
-- **±N** follows the figure when the projection has typically missed by more than 5 points: `Week 9% to spare ±12`.
+- **Week:** what's projected to be left when the weekly limit resets, at your pace, in green: **~6% left at reset**. It's a forecast, not what you have left now. If you won't make it, it says in Claude's orange when you'd run out and how long before the reset: **runs out Wed ~12:45**, 22h early.
+- **±N** follows the figure when the projection has typically missed by more than 5 points: `Week ~9% left at reset ±12`.
 - **early** follows it until a whole day is on record (just after you install). Until then it's the older hourly estimate.
-- **5h:** in clock times. **cut off ~00:09** in orange if you'd hit the 5-hour limit before it resets, or **55% to spare** in green, then when it resets.
-- In a narrow terminal it shortens to stay on one line: `Week +6% 4d 13h · 5h out 00:09 · Details`.
+- **5h:** in clock times. **cut off ~00:09** in orange if you'd hit the 5-hour limit before it resets, or what's projected to be left when it resets, in green: **~55% left at 15:40**.
+- In a narrow terminal it shortens to stay on one line: `Week ~6% @reset 4d 13h · 5h out 00:09 · Details`.
 - **Details** opens the pane.
 
 **The pane** has a card per limit and a models card, under the mod's name. Every % on them says what its 100% is, and a figure never mixes the week with the day. Each card's extra detail sits behind its **Details** strip; **Expand all details** at the top opens them all at once.
@@ -55,10 +55,9 @@ The **Details** strip under the card opens the older view: its figures (what's l
 
 **5-hour window** (100% = your 5-hour limit): "Cut off ~17:36 at this pace", or "Lasts to the reset at 15:40", and the window's use as one bar, in % of the 5-hour limit: what's used, solid, and what your pace adds before the reset, striped. Its **Details** opens the older view, as the weekly card's does.
 
-**Models** shows each model's cost in one line; its **Details** opens what each model costs and where your week went:
+**Models** shows where your usage went, as one bar for the limit you choose with **5h** or **Week**. It opens on whichever limit is closer to running out. The bar is in that limit's own units: "This week · 100% = your weekly limit". Each model gets a segment in its colour, with its effort levels beneath. **Not recorded** (hatched) is use this computer didn't see: another device, the phone, claude.ai, or a time no session was open. The faint rest is unused.
 
-- **Cost** compares each model token for token with a baseline you pick under **Compare with** (Sonnet by default). "Opus 4.7×" means the same tokens on Opus use 4.7 times as much of your limit as on Sonnet, whether it's a quick answer or a long agentic run. The likely range is shown beneath.
-- **This week** splits the % of your weekly limit by model and effort level. Higher effort means more thinking tokens, so it shows here, not in the cost. Usage the plugin didn't see stays apart as **Not recorded**.
+Each rise of the limit is shared among the responses behind it, weighed by token cost. Every model starts at its published list price and learns from your own use, so the split works from your first response. **Details** shows each model's token cost against the one known most precisely, marked **list price** until enough of your use is behind it, and **Compare with** picks another baseline.
 
 In the terminal, where there are no drawings, each card shows the same figures as text.
 

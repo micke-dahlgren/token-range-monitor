@@ -2,7 +2,7 @@ import type { Palettes, RangeReading, RangeStep } from '../types'
 import { C, DAY, FONT, HOUR, KEEP, drawing, esc, increments, isWatched, ofKind, usedBetween } from './range'
 import type { Model, Watch } from './range'
 import { DEFAULT_PALETTES } from './theme'
-import { NARROW, SIZE, cardHeader, rect, rich, t, tw } from './ui'
+import { SIZE, cardHeader, rect, t, tw } from './ui'
 
 /**
  * What each model costs, learned from this account's own history.
@@ -15,8 +15,10 @@ import { NARROW, SIZE, cardHeader, rect, rich, t, tw } from './ui'
  * comes out the same from either limit, and the week's points are the 5-hour
  * ones exchanged at the account's own rate (5-hour points per weekly point). Within a
  * model, its token kinds are combined at that model's published price ratios
- * (UNITS), so only the weight across models is learned. A model's cost shows
- * once its weight is known within ±SHOW_WITHIN.
+ * (UNITS), so only the weight across models is learned. Each weight starts at
+ * the model's list price (LIST_PRICE), scaled to the account by one fitted
+ * number, and the stretches pull it from there as they add up: every model has
+ * a weight from its first response.
  */
 
 /** A response's tokens, weighted as a model's price list weighs them: input 1, output 5, cache writes 1.25, cache reads 0.1. */
@@ -25,12 +27,32 @@ export const units = (u: { input_tokens: number; output_tokens: number; cache_re
 
 /** How far back the costs are learned from. */
 export const LEARN_SPAN = 14 * DAY
-/** A cost shows once its 90% range is within this share of it. */
-export const SHOW_WITHIN = 0.2
-/** And once this many stretches had the model in them: a few stretches can fit too well by chance. */
+/** Under this many stretches with the model in them, its weight is mostly its list price. */
 const MIN_STRETCHES = 5
 /** z for a 90% range. */
 const Z90 = 1.645
+/** The list price counts as this many typical stretches of the model: the data outweighs it once it has more. */
+const PRIOR_STRETCHES = 10
+
+/**
+ * Published API prices per million input tokens, by family and version (output is 5× input for every one, as
+ * UNITS weighs it). Only their ratios matter: they are each model's starting weight. A version not listed takes
+ * its family's newest price.
+ */
+export const LIST_PRICE: Record<string, number> = {
+  'fable 5.1': 10, 'fable 5': 10,
+  'opus 5.5': 4, 'opus 5': 5, 'opus 4.8': 5, 'opus 4.7': 5, 'opus 4.6': 5,
+  'sonnet 5.5': 2, 'sonnet 5': 2, 'sonnet 4.6': 3,
+  'haiku 5.5': 0.1, 'haiku 4.5': 1,
+}
+const NEWEST: Record<string, number> = { fable: 10, opus: 4, sonnet: 2, haiku: 0.1 }
+
+/** A model's list price per million input tokens, or null for a model of no known family. */
+export function listPrice(id: string): number | null {
+  const m = modelName(id)
+  if (m.family === 'other') return null
+  return LIST_PRICE[`${m.family} ${m.version.join('.')}`] ?? NEWEST[m.family]!
+}
 
 const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'] as const
 export type Family = (typeof FAMILIES)[number] | 'other'
@@ -61,16 +83,17 @@ export type ModelCost = {
   id: string
   name: string
   family: Family
-  /** 5-hour points per million weighted tokens; 0 until anything is known. */
+  /** 5-hour points per million weighted tokens (in list-price units until a stretch is watched); 0 when unknown. */
   w: number
   /** The 90% range as a share of `w`: Infinity while nothing is known. */
   rel: number
+  /** Whether it has a weight at all: a list price, or a fit. */
   shown: boolean
+  /** Whether that weight is still mostly the list price: too few stretches had the model in them. */
+  prior: boolean
   /** Responses in the learning span, and how many of them subagents made. */
   responses: number
   sub: number
-  /** About how many more responses until it shows; 0 once it does or when it can't be told. */
-  more: number
 }
 
 export type Learned = {
@@ -132,12 +155,25 @@ export function learn(readings: readonly RangeReading[], steps: readonly RangeSt
     since ??= a[0]
   }
 
-  // least squares over the models still in, dropping the most negative until none is
+  // each model's starting weight: its list price, scaled to this account's points by one number fitted to every stretch
+  const price = ids.map(listPrice)
+  const z = rows.map(r => r.x.reduce((t, v, i) => t + v * (price[i] ?? 0), 0))
+  const zz = z.reduce((t, v) => t + v * v, 0)
+  const scale = zz > 0 ? rows.reduce((t, r, k) => t + r.y * z[k]!, 0) / zz : 1
+  const w0 = price.map(p => (p === null ? 0 : p * scale))
+  // how much the start counts: PRIOR_STRETCHES of the model's typical stretch
+  const lam = ids.map((_, i) => {
+    if (price[i] === null) return 0
+    const xs = rows.map(r => r.x[i]!).filter(v => v > 0)
+    return xs.length ? PRIOR_STRETCHES * xs.reduce((t, v) => t + v * v, 0) / xs.length : 0
+  })
+
+  // least squares over the models still in, pulled toward their start, dropping the most negative until none is
   let active = ids.map((_, i) => i).filter(i => rows.some(r => r.x[i]! > 0))
   let fit: { x: number[]; inv: number[][] } | null = null
   while (active.length) {
-    const A = active.map(i => active.map(j => rows.reduce((s, r) => s + r.x[i]! * r.x[j]!, 0)))
-    const b = active.map(i => rows.reduce((s, r) => s + r.x[i]! * r.y, 0))
+    const A = active.map(i => active.map(j => rows.reduce((t, r) => t + r.x[i]! * r.x[j]!, 0) + (i === j ? lam[i]! : 0)))
+    const b = active.map(i => rows.reduce((t, r) => t + r.x[i]! * r.y, 0) + lam[i]! * w0[i]!)
     fit = solve(A, b)
     if (!fit) break
     const worst = fit.x.reduce((k, v, j) => (v < (fit!.x[k] ?? 0) ? j : k), 0)
@@ -145,14 +181,16 @@ export function learn(readings: readonly RangeReading[], steps: readonly RangeSt
     active = active.filter((_, j) => j !== worst)
     fit = null
   }
-  const w = ids.map(() => 0), rel = ids.map(() => Infinity)
-  if (fit && rows.length > active.length) {
+  // a model no watched stretch had, or one the fit dropped as negative, keeps its start
+  const w = ids.map((_, i) => w0[i]!), rel = ids.map(() => Infinity)
+  const fitted = fit && (rows.length > active.length || active.every(i => lam[i]! > 0))
+  if (fit && fitted) {
     active.forEach((i, j) => { w[i] = fit!.x[j]! })
-    const rss = rows.reduce((s, r) => s + (r.y - r.x.reduce((t, v, i) => t + v * w[i]!, 0)) ** 2, 0)
+    const rss = rows.reduce((t, r) => t + (r.y - r.x.reduce((u, v, i) => u + v * w[i]!, 0)) ** 2, 0)
     // the limit is read at whole points, so each end of a stretch is off by part of the response that crossed
     // the point, evenly anywhere in it: never trust a fit closer than that (two ends, each size²/12)
-    const perResponse = rows.reduce((s, r) => s + r.y, 0) / rows.reduce((s, r) => s + r.n, 0)
-    const s2 = Math.max(rss / (rows.length - active.length), perResponse ** 2 / 6)
+    const perResponse = rows.reduce((t, r) => t + r.y, 0) / rows.reduce((t, r) => t + r.n, 0)
+    const s2 = Math.max(rss / Math.max(1, rows.length - active.length), perResponse ** 2 / 6)
     active.forEach((i, j) => {
       if (w[i]! > 0) rel[i] = Z90 * Math.sqrt(s2 * fit!.inv[j]![j]!) / w[i]!
     })
@@ -168,19 +206,18 @@ export function learn(readings: readonly RangeReading[], steps: readonly RangeSt
     models: ids.map((id, i) => {
       const mine = recent.filter(s => s[1] === id)
       const stretches = rows.filter(r => r.x[i]! > 0).length
-      const shown = rel[i]! <= SHOW_WITHIN && stretches >= MIN_STRETCHES
-      // the range narrows about as the square root of what's behind it
-      const more = shown || !isFinite(rel[i]!) ? 0 : Math.max(1, Math.ceil(mine.length * ((rel[i]! / SHOW_WITHIN) ** 2 - 1)))
-      return { id, ...modelName(id), w: w[i]!, rel: rel[i]!, shown, responses: mine.length, sub: mine.filter(s => s[4]).length, more }
+      return { id, ...modelName(id), w: w[i]!, rel: rel[i]!, shown: w[i]! > 0, prior: stretches < MIN_STRETCHES, responses: mine.length, sub: mine.filter(s => s[4]).length }
     }),
   }
 }
 
-/** The model the others compare to: the one picked, else the newest Sonnet shown, else the most used shown. Null under two shown. */
+/** The model the others compare to: the one picked, else the one known most precisely from your use, else the most used. Null under two shown. */
 export function baselineOf(l: Learned, picked: string | undefined): ModelCost | null {
   const shown = l.models.filter(m => m.shown)
   if (shown.length < 2) return null
-  return shown.find(m => m.id === picked) ?? shown.find(m => m.family === 'sonnet') ?? [...shown].sort((a, b) => b.responses - a.responses)[0]!
+  return shown.find(m => m.id === picked)
+    ?? [...shown].filter(m => !m.prior && isFinite(m.rel)).sort((a, b) => a.rel - b.rel)[0]
+    ?? [...shown].sort((a, b) => b.responses - a.responses)[0]!
 }
 
 /** The names the baseline buttons show: the family alone, unless two versions of it are shown. */
@@ -189,34 +226,64 @@ export function shortNames(models: readonly ModelCost[]): Map<string, string> {
   return new Map(models.map(m => [m.id, m.family !== 'other' && count(m.family) === 1 ? m.name.replace(/ [\d.]+$/, '') : m.name]))
 }
 
-export type Spend = {
-  /** % of the weekly limit used. */
-  week: number
-  /** Points per shown model, split by effort (largest first). */
-  models: Array<{ cost: ModelCost; pts: number; effort: Array<[string, number]> }>
-  /** Recorded here, but by models whose cost isn't known yet. */
-  unsplit: number
-  /** Used where this computer wasn't watching. */
-  away: number
+export type UsageSplit = {
+  kind: 'five' | 'week'
+  /** % of the limit used this window. */
+  used: number
+  /** Each model's % of the limit, largest first, split by effort (largest first). */
+  models: Array<{ id: string; name: string; family: Family; pct: number; effort: Array<[string, number]> }>
+  /** Used with no responses seen here behind it: another device, the phone, claude.ai, or a gap nobody watched. */
+  notRecorded: number
+  /** 100 − used, never below 0. */
+  unused: number
 }
 
-/** This week's points by model and effort, from the responses since the reset and the learned weights. */
-export function spend(week: Model, l: Learned, steps: readonly RangeStep[], now: number): Spend {
-  const start = week.resetsAt - 7 * DAY
-  const models = (l.perWeek ? l.models.filter(m => m.shown) : []).map(cost => {
-    const by = new Map<string, number>()
-    for (const s of steps) if (s[1] === cost.id && s[0] > start && s[0] <= now) by.set(s[2] || 'default', (by.get(s[2] || 'default') ?? 0) + s[3] / 1e6 * cost.w / l.perWeek!)
-    const effort = [...by].sort((a, b) => b[1] - a[1])
-    return { cost, pts: effort.reduce((s, e) => s + e[1], 0), effort }
-  }).filter(m => m.pts > 0)
-  const recorded = usedBetween(week.increments.filter(i => !i.hole), start, now)
-  const split = models.reduce((s, m) => s + m.pts, 0)
-  return { week: week.pct, models, unsplit: Math.max(0, recorded - split), away: Math.max(0, week.pct - recorded) }
+/**
+ * This window's use of a limit by model and effort. Each rise of the limit seen while watching is shared among
+ * the responses made since the reading before it, by their weighted tokens × their model's weight; a rise with
+ * no responses behind it, or over a gap, is not recorded. Rises adding up to more than the figure are scaled
+ * down to it; to less, the rest is not recorded. models + notRecorded + unused = 100.
+ */
+export function usageSplit(m: Model, readings: readonly RangeReading[], steps: readonly RangeStep[], seen: readonly Watch[], weightOf: (id: string) => number, now: number): UsageSplit {
+  const kind = m.kind as 'five' | 'week', from = m.resetsAt - (kind === 'five' ? 5 * HOUR : 7 * DAY), used = Math.min(100, m.pct)
+  const sorted = [...steps].sort((a, b) => a[0] - b[0])
+  const by = new Map<string, Map<string, number>>()
+  let total = 0, away = 0
+  for (const inc of increments(readings, kind, seen)) {
+    const overlap = Math.min(inc.end, now) - Math.max(inc.start, from)
+    if (overlap <= 0) continue
+    const amount = inc.amount * Math.min(1, overlap / Math.max(1, inc.end - inc.start))
+    total += amount
+    if (inc.hole || inc.from === undefined) { away += amount; continue }
+    // the responses in (inc.from, inc.end]
+    let lo = 0, hi = sorted.length
+    while (lo < hi) { const k = (lo + hi) >> 1; if (sorted[k]![0] <= inc.from) lo = k + 1; else hi = k }
+    const shares: Array<[string, string, number]> = []
+    let weight = 0
+    for (let i = lo; i < sorted.length && sorted[i]![0] <= inc.end; i++) {
+      const st = sorted[i]!, wt = st[3] * weightOf(st[1])
+      if (!(wt > 0)) continue
+      shares.push([st[1], st[2] || 'default', wt])
+      weight += wt
+    }
+    if (weight <= 0) { away += amount; continue }
+    for (const [id, effort, wt] of shares) {
+      const e = by.get(id) ?? new Map<string, number>()
+      e.set(effort, (e.get(effort) ?? 0) + amount * wt / weight)
+      by.set(id, e)
+    }
+  }
+  // the record may cover more or less than the figure: scale down to it, or the rest is not recorded
+  const scale = total > used && total > 0 ? used / total : 1
+  const models = [...by].map(([id, e]) => {
+    const effort = [...e].map(([k, v]): [string, number] => [k, v * scale]).sort((a, b) => b[1] - a[1])
+    return { id, ...modelName(id), pct: effort.reduce((t, x) => t + x[1], 0), effort }
+  }).filter(x => x.pct > 0).sort((a, b) => b.pct - a.pct || byRank(a.id, b.id))
+  return { kind, used, models, notRecorded: away * scale + Math.max(0, used - total), unused: Math.max(0, 100 - used) }
 }
 
 // ---- words ----
 
-const comma = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+$)/, ',')
 const times = (x: number) => (x >= 1 ? x.toFixed(1) : x.toFixed(2)) + '×'
 const one = (n: number) => n.toFixed(1).replace(/\.0$/, '')
 /** A share of the weekly limit: "41.2%". */
@@ -224,33 +291,46 @@ const pc = (n: number) => `${one(n)}%`
 
 /** A model's cost against the baseline, and its likely range. */
 export function ratio(m: ModelCost, b: ModelCost): { x: string; range: string } {
-  const x = m.w / b.w, err = Math.hypot(m.rel, b.rel)
+  // only what was measured counts toward the range: a list price is taken as given
+  const x = m.w / b.w, err = Math.hypot(isFinite(m.rel) ? m.rel : 0, isFinite(b.rel) ? b.rel : 0)
   return { x: times(x), range: `${times(Math.max(0, x * (1 - err)))}–${times(x * (1 + err))}` }
 }
 
-const responsesText = (m: ModelCost) =>
-  `${comma(m.responses)} ${m.responses === 1 ? 'response' : 'responses'}${m.sub === m.responses && m.sub > 0 ? ', all subagents' : m.sub > m.responses / 2 ? ', mostly subagents' : ''}`
+/** What the card counts, under its Details. */
+export const MODELS_INFO = 'The bar shows how much of the limit each model used this window, by effort. Each rise of the limit is shared among the responses behind it, weighed by token cost: each model starts at its list price and learns from your own use. Not recorded is use this computer didn’t see: another device, the phone, claude.ai.'
 
-/** The tooltip on the card's ⓘ. */
-export const MODELS_INFO = 'Cost: how much of your limit each model uses token for token, compared with the model you pick. Learned from your history; shown once it’s within ±20%. This week: the % of the weekly limit that went to each model, by effort.'
+/** A model's efforts worth naming: a sliver under 0.05% would read as 0%. */
+export const shownEffort = (m: UsageSplit['models'][number]) => m.effort.filter(([, v]) => v >= 0.05)
 
-/** The card in words, for a reader that can't see it and for surfaces without drawings. */
-export function modelsText(l: Learned, b: ModelCost | null, sp: Spend | null): string[] {
-  const rows = l.models.map(m => {
-    if (!m.shown) return `${m.name}: learning, ${responsesText(m)}${m.more ? `, about ${comma(m.more)} more to go` : ''}.`
-    if (!b) return `${m.name}: known, ${responsesText(m)}.`
-    if (m === b) return `${m.name}: 1×, the baseline.`
-    const r = ratio(m, b)
-    return `${m.name}: ${r.x} ${b.name}, likely ${r.range}.`
-  })
-  if (sp) {
-    rows.push(`This week ${Math.round(sp.week)}% used: ${[
-      ...sp.models.map(m => `${m.cost.name} ${pc(m.pts)} (${m.effort.map(([e, v]) => `${e} ${pc(v)}`).join(', ')})`),
-      ...(sp.unsplit ? [`not split yet ${pc(sp.unsplit)}`] : []),
-      `not recorded ${pc(sp.away)}`,
-    ].join(', ')}.`)
-  }
-  return rows
+/** The frame a split is in: what its 100% is. */
+export const splitFrame = (sp: UsageSplit) => (sp.kind === 'five' ? 'This 5-hour window · 100% = your 5-hour limit' : 'This week · 100% = your weekly limit')
+
+/** The split in words, for a reader that can't see the bar and for the terminal. */
+export function splitText(sp: UsageSplit): string {
+  const parts = [
+    ...sp.models.map(m => { const ef = shownEffort(m); return `${m.name} ${pc(m.pct)}${ef.length > 1 ? ` (${ef.map(([e, v]) => `${e} ${pc(v)}`).join(', ')})` : ''}` }),
+    ...(sp.notRecorded >= 0.05 ? [`not recorded ${pc(sp.notRecorded)}`] : []),
+    `unused ${pc(sp.unused)}`,
+  ]
+  return `${splitFrame(sp)}: ${parts.join(', ')}.`
+}
+
+/**
+ * Each model's token cost against the baseline, a row per model with the baseline first: its figure, and where
+ * the figure comes from (its list price, your use with its likely range, or a rough fit that needs more use).
+ */
+export function costRows(l: Learned, b: ModelCost | null): Array<{ id: string; name: string; x: string; note: string }> {
+  if (!b) return []
+  const others = l.models.filter(m => m.shown && m !== b)
+  if (!others.length) return []
+  return [
+    { id: b.id, name: b.name, x: '1×', note: 'baseline' },
+    ...others.map(m => {
+      const r = ratio(m, b)
+      const note = m.prior ? 'list price' : isFinite(m.rel) && m.rel <= 0.5 ? `likely ${r.range}` : 'rough, needs more use'
+      return { id: m.id, name: m.name, x: r.x, note }
+    }),
+  ]
 }
 
 // ---- drawing ----
@@ -258,139 +338,63 @@ export function modelsText(l: Learned, b: ModelCost | null, sp: Spend | null): s
 /** A model's colour for its cost figure: Opus the accent, then the second and third tones. */
 const colorOf = (f: Family) => (f === 'other' ? C.muted : C[f])
 
-/** A span in words: "14 days", "9 hours", "40 minutes". */
-const spanText = (h: number) => {
-  const [n, unit] = h >= 48 ? [Math.round(h / 24), 'day'] : h >= 1 ? [Math.round(h), 'hour'] : [Math.max(1, Math.round(h * 60)), 'minute']
-  return `${n} ${unit}${n === 1 ? '' : 's'}`
-}
-
-/** One model's figure in the summary line: its cost against the baseline, 1× for the baseline, or learning. */
-export function costWord(m: ModelCost, b: ModelCost | null): string {
-  if (!m.shown) return 'learning'
-  if (!b || m === b) return '1×'
-  return ratio(m, b).x
+/** The models card's head, `width` wide: its header, with the frame of the split under it on the right. */
+export function modelsHead(sp: UsageSplit | null, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+  const head = cardHeader('model', 'Models', 'Where your usage went', sp ? [{ s: sp.kind === 'five' ? 'This 5-hour window' : 'This week' }] : [], width)
+  return drawing(head.svg, Math.ceil(head.y + 4), pal)
 }
 
 /**
- * The models card's head, `width` wide: its header ("Models", how long the costs were learned from), and a
- * line of each model's cost against the baseline, a dot before each.
+ * The split, `width` wide: its frame, one stacked bar on the limit's scale (each model in its colour, what wasn't
+ * recorded hatched, what's unused faint), then a row per model with its figure and a chip per effort, and the
+ * not-recorded row.
  */
-export function modelsHead(l: Learned, b: ModelCost | null, now: number, width: number, pal: Palettes = DEFAULT_PALETTES): string {
-  const learned = l.since === null ? 'Learning' : `Learned from ${spanText((now - l.since) / HOUR)}`
-  const head = cardHeader('model', 'Models', 'Relative token costs, learned from your usage', [{ s: learned }], width)
-  let s = head.svg, y = head.y + SIZE.body * 1.05
-  if (!l.models.length) {
-    s += t(0, y, 'Learning from your responses.', { size: SIZE.body, fill: C.muted })
-    return drawing(s, Math.ceil(y + 10), pal)
-  }
+export function modelsUsage(sp: UsageSplit, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+  let s = `<defs><pattern id="nr" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" style="fill:${C.raised}"/><rect width="2" height="5" style="fill:${C.faint}"/></pattern></defs>`
+  let y = SIZE.meta * 1.15
+  s += t(0, y, splitFrame(sp), { size: SIZE.meta, fill: C.muted })
+  y += 10
+  // the bar: models, then not recorded, then unused, 2px apart
+  const parts = [...sp.models.map(m => ({ v: m.pct, fill: colorOf(m.family) })), { v: sp.notRecorded, fill: 'url(#nr)' }].filter(x => x.v >= 0.05)
+  const H = 14
+  s += rect(0, y, width, H, `fill:${C.raised}`, ' rx="4"')
   let x = 0
-  l.models.forEach((m, i) => {
-    const word = `${m.name} ${costWord(m, b)}`, w = 11 + tw(word, SIZE.body)
-    const sep = i ? 12 + tw('·', SIZE.body) + 12 : 0
-    if (i && x + sep + w > width) { x = 0; y += SIZE.body * 1.8 }
-    else if (i) { s += t(x + 12, y, '·', { size: SIZE.body, fill: C.faint }); x += sep }
-    s += `<circle cx="${(x + 3).toFixed(1)}" cy="${(y - SIZE.body * 0.33).toFixed(1)}" r="3" style="fill:${C.accent}"/>` + t(x + 11, y, word, { size: SIZE.body, fill: C.muted })
-    x += w
-  })
-  return drawing(s, Math.ceil(y + 10), pal)
-}
-
-/**
- * The cost columns, `width` wide: each model's name (the baseline marked), its cost against the baseline as
- * a large figure in its colour, how many responses it's learned from and its likely range; a model still
- * learning says so, and how many more responses it needs. Three across, one per row where it's narrow.
- */
-export function modelsCosts(l: Learned, b: ModelCost | null, width: number, pal: Palettes = DEFAULT_PALETTES): string {
-  if (!l.models.length) {
-    const r = t(0, 18, 'No responses recorded yet. Costs are learned from the responses your sessions get.', { size: SIZE.meta, fill: C.muted })
-    return drawing(r, 28, pal)
+  for (const p of parts) {
+    const w = Math.max(2, p.v / 100 * width)
+    s += rect(x, y, Math.min(w, width - x), H, `fill:${p.fill}`, x === 0 ? ' rx="4"' : '')
+    x += w + 2
+    if (x >= width) break
   }
-  const narrow = width < NARROW, cols = narrow ? 1 : Math.min(3, l.models.length), cw = width / cols
-  let s = '', rowTop = 12, rowH = 0
-  l.models.forEach((m, i) => {
-    const col = i % cols
-    if (i && col === 0) { rowTop += rowH + 10; rowH = 0 }
-    const x = col * cw + (col ? 20 : 0), inner = cw - (col ? 20 : 0) - (col < cols - 1 ? 20 : 0)
-    const isBase = !!b && m === b
-    let y = rowTop + 6 + SIZE.body * 1.05
-    s += t(x, y, m.name, { size: SIZE.body, weight: 500 })
-    if (isBase) {
-      const bx = x + tw(m.name, SIZE.body, 500) + 7
-      s += rect(bx, y - 13, tw('baseline', SIZE.meta) + 10, 19, `fill:${C.raised}`, ' rx="3"') + t(bx + 5, y + 1, 'baseline', { size: SIZE.meta, fill: C.muted })
-    }
-    const notes: string[] = [responsesText(m)]
-    let fig: string, figFill: string = colorOf(m.family), big = true
-    if (!m.shown) {
-      fig = 'Learning'; figFill = C.muted; big = false
-      notes.push('Not sure enough yet', `Shows at ±20% · ${m.more ? `~${comma(m.more)} more responses` : 'needs more responses'}`)
-    } else if (!b) { fig = 'Known'; figFill = C.muted; big = false; notes.push('Compares once a second model shows') }
-    else if (isBase) { fig = '1×'; notes.push('the others compare to this') }
-    else { const r = ratio(m, b); fig = r.x; notes.push(`likely ${r.range}`) }
-    if (narrow) {
-      // the figure at the right of the name and its notes
-      const mid = rowTop + 6 + (SIZE.body * 1.5 + notes.length * SIZE.meta * 1.6) / 2
-      s += t(x + inner, mid + (big ? SIZE.title : SIZE.body) * 0.36, fig, { size: big ? SIZE.title : SIZE.body, weight: big ? 600 : 400, fill: figFill, anchor: 'end' })
-      y += 4
-    } else {
-      y += 7 + (big ? SIZE.title * 1.15 : SIZE.body * 1.6)
-      s += t(x, y, fig, { size: big ? SIZE.title : SIZE.body, weight: big ? 600 : 400, fill: figFill })
-      y += 7
-    }
-    for (const n of notes) { y += SIZE.meta * 1.6; s += t(x, y, n, { size: SIZE.meta, fill: C.muted }) }
-    rowH = Math.max(rowH, y - rowTop + 6)
-  })
-  return drawing(s, Math.ceil(rowTop + rowH + 8), pal)
-}
-
-/**
- * This week's points by model, `width` wide: the heading; per model, its share of the weekly limit, a track
- * split by effort and a chip per effort; then what isn't split by model yet and what wasn't recorded.
- */
-export function modelsSpend(sp: Spend, width: number, pal: Palettes = DEFAULT_PALETTES): string {
-  let s = '', y = SIZE.body * 1.1
-  s += t(0, y, `This week · ${Math.round(sp.week)}% of limit used`, { size: SIZE.body })
-  y += SIZE.meta * 1.6
-  s += t(0, y, '% of the weekly limit, by model and effort', { size: SIZE.meta, fill: C.muted })
-  y += 13
-  const row = (name: string, v: number, quiet: boolean, outline = false) => {
-    const hy = y + (quiet ? 9 : 14) + SIZE.body * 1.05
-    s += outline
-      ? rect(0.5, hy - 9.5, 7, 7, `fill:none;stroke:${C.faint}`, ' rx="2"')
-      : rect(0, hy - 10, 8, 8, `fill:${C.accent}`, ' rx="2"')
+  y += H + 8
+  const row = (name: string, v: number, dot: string, quiet: boolean) => {
+    const hy = y + 12 + SIZE.body * 1.05
+    s += rect(0, hy - 10, 8, 8, `fill:${dot}`, ' rx="2"')
     s += t(15, hy, name, { size: SIZE.body, fill: quiet ? C.muted : C.fg }) + t(width, hy, pc(v), { size: SIZE.body, fill: quiet ? C.muted : C.fg, anchor: 'end' })
     return hy
   }
   for (const m of sp.models) {
-    const hy = row(m.cost.name, m.pts, false)
-    // the track: each effort's share of the weekly limit, side by side, the lesser ones lighter
-    const ty = hy + 9
-    s += rect(0, ty, width, 6, `fill:${C.raised}`, ' rx="3"')
-    let x = 0
-    m.effort.forEach(([, v], i) => {
-      const w = Math.min(width - x, v / 100 * width)
-      if (w > 0) s += rect(x, ty, w, 6, `fill:${C.accent}`, ` rx="3"${i ? ' fill-opacity="0.5"' : ''}`)
-      x += w + 3
-    })
-    // a chip per effort: its name, and its share of the weekly limit
-    let cx = 0, cy = ty + 6 + 8
-    for (const [e, v] of m.effort) {
-      const a = pc(v), w = 6 + tw(`${e} `, SIZE.meta) + tw(a, SIZE.meta) + 6
-      if (cx > 0 && cx + w > width) { cx = 0; cy += 27 }
-      s += rect(cx, cy, w, 22, `fill:${C.raised}`, ' rx="3"')
-      s += `<text x="${(cx + 6).toFixed(1)}" y="${(cy + 15.5).toFixed(1)}" font-family="${FONT}" font-size="${SIZE.meta}px" xml:space="preserve"><tspan style="fill:${C.muted}">${esc(`${e} `)}</tspan><tspan style="fill:${C.faint}">${esc(a)}</tspan></text>`
-      cx += w + 7
+    const hy = row(m.name, m.pct, colorOf(m.family), false)
+    y = hy + 4
+    const ef = shownEffort(m)
+    if (ef.length > 1 || (ef[0] && ef[0][0] !== 'default')) {
+      // a chip per effort: its name, and its share of the limit
+      let cx = 15, cy = hy + 6
+      for (const [e, v] of ef) {
+        const a = pc(v), w = 6 + tw(`${e} `, SIZE.meta) + tw(a, SIZE.meta) + 6
+        if (cx > 15 && cx + w > width) { cx = 15; cy += 27 }
+        s += rect(cx, cy, w, 22, `fill:${C.raised}`, ' rx="3"')
+        s += `<text x="${(cx + 6).toFixed(1)}" y="${(cy + 15.5).toFixed(1)}" font-family="${FONT}" font-size="${SIZE.meta}px" xml:space="preserve"><tspan style="fill:${C.muted}">${esc(`${e} `)}</tspan><tspan style="fill:${C.faint}">${esc(a)}</tspan></text>`
+        cx += w + 7
+      }
+      y = cy + 22
     }
-    y = cy + 22 + 14
   }
-  if (sp.unsplit) y = row('Not split yet', sp.unsplit, true) + 9
-  y = row('Not recorded', sp.away, true, true) + 9
-  if (!sp.models.length) {
-    const note = rich([{ s: `No model’s cost is known yet, so this week can’t be split. The ${pc(sp.unsplit)} of the week recorded here will split once a model’s figure shows.` }],
-      0, y + 12 + SIZE.meta * 1.2, width, SIZE.meta, 1.7)
-    s += note.svg
-    y = note.y + 10
+  if (sp.notRecorded >= 0.05) y = row('Not recorded', sp.notRecorded, C.faint, true) + 4
+  if (!sp.models.length && sp.notRecorded < 0.05) {
+    y += 12 + SIZE.meta * 1.2
+    s += t(0, y, 'Nothing used yet this window.', { size: SIZE.meta, fill: C.muted })
   }
-  return drawing(s, Math.ceil(y + 4), pal)
+  return drawing(s, Math.ceil(y + 8), pal)
 }
 
 /** Steps older than the readings are kept are dropped, and repeats merged. */
