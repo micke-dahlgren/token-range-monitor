@@ -26,6 +26,8 @@ claude plugin update token-range-monitor
 
 **Above the prompt**, one line:
 
+<img src="docs/band.png" alt="The line above the prompt: Week ~25% left at reset, in 2d 20h · 5h ~76% left at 17:30 · Details" width="600">
+
 > Week **~6% left at reset**, in 4d 13h · 5h **cut off ~00:09**, resets 00:40 · Details ↗
 
 - **Week:** what's projected to be left when the weekly limit resets, at your pace, in green: **~6% left at reset**. It's a forecast, not what you have left now. If you won't make it, it says in Claude's orange when you'd run out and how long before the reset: **runs out Wed ~12:45**, 22h early.
