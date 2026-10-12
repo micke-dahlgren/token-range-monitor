@@ -297,7 +297,11 @@ export function ratio(m: ModelCost, b: ModelCost): { x: string; range: string } 
 }
 
 /** What the card counts, under its Details. */
-export const MODELS_INFO = 'The bar shows how much of the limit each model used this window, by effort. Each rise of the limit is shared among the responses behind it, weighed by token cost: each model starts at its list price and learns from your own use. Not recorded is use this computer didn’t see: another device, the phone, claude.ai.'
+export const MODELS_INFO: Array<[string, string]> = [
+  ['The bar shows which models used up your limit.', 'A bigger piece means that model used more.'],
+  ['Some models cost more than others.', 'We start with a guess and get better the more you use Claude.'],
+  ['Grey stripes are use we couldn’t see,', 'like on your phone or the website.'],
+]
 
 /** A model's efforts worth naming: a sliver under 0.05% would read as 0%. */
 export const shownEffort = (m: UsageSplit['models'][number]) => m.effort.filter(([, v]) => v >= 0.05)

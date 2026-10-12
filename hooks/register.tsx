@@ -756,6 +756,17 @@ export const register: Register = (on, options) => {
     const modelsSummary = !split ? 'No limit reported yet.'
       : split.models.length ? split.models.slice(0, 3).map(m => `${names.get(m.id) ?? m.name} ${one(m.pct)}%`).join(' · ')
       : 'Nothing used yet this window.'
+    // what the card counts, three plain lines, each point first
+    const modelsInfo = (
+      <Box key="models-info" flexDirection="column">
+        {MODELS_INFO.map(([point, rest], i) => (
+          <Box key={`info-${i}`} flexDirection="row" flexWrap="wrap" columnGap={1}>
+            <Text bold dimColor>{point}</Text>
+            <Text dimColor>{rest}</Text>
+          </Box>
+        ))}
+      </Box>
+    )
     // the costs as a small table: name, figure, where the figure comes from
     const rowsOfCost = costRows(learned, base)
     const costTable = (
@@ -882,7 +893,7 @@ export const register: Register = (on, options) => {
         inner: () => [
           costTable,
           compareRow,
-          <Text key="models-info" dimColor>{MODELS_INFO}</Text>,
+          modelsInfo,
         ],
       })
 
@@ -1059,6 +1070,7 @@ export const register: Register = (on, options) => {
         )}
         <Box key="models-foot" flexDirection="row" justifyContent="flex-end">{detailsButton('models')}</Box>
         {modelsOpen && costTable}
+        {modelsOpen && modelsInfo}
         {modelsOpen && compareRow}
       </Box>
     )
