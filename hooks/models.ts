@@ -316,21 +316,19 @@ export function splitText(sp: UsageSplit): string {
 }
 
 /**
- * Each model's token cost against the baseline, a row per model with the baseline first: its figure, and where
+ * Each model's token cost against the baseline, a row per model from the most to the least costly: its figure, and where
  * the figure comes from (its list price, your use with its likely range, or a rough fit that needs more use).
  */
 export function costRows(l: Learned, b: ModelCost | null): Array<{ id: string; name: string; x: string; note: string }> {
   if (!b) return []
   const others = l.models.filter(m => m.shown && m !== b)
   if (!others.length) return []
-  return [
-    { id: b.id, name: b.name, x: '1×', note: 'baseline' },
-    ...others.map(m => {
-      const r = ratio(m, b)
-      const note = m.prior ? 'list price' : isFinite(m.rel) && m.rel <= 0.5 ? `likely ${r.range}` : 'rough, needs more use'
-      return { id: m.id, name: m.name, x: r.x, note }
-    }),
-  ]
+  return [b, ...others].sort((p, q) => q.w - p.w).map(m => {
+    if (m === b) return { id: m.id, name: m.name, x: '1×', note: 'baseline' }
+    const r = ratio(m, b)
+    const note = m.prior ? 'list price' : isFinite(m.rel) && m.rel <= 0.5 ? `likely ${r.range}` : 'rough, needs more use'
+    return { id: m.id, name: m.name, x: r.x, note }
+  })
 }
 
 // ---- drawing ----

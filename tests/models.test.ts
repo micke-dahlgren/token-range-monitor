@@ -80,8 +80,9 @@ test('each model’s cost is learned from the ticks, from its list price on', as
   expect(ratio(sonnet!, opus!).x).toMatch(/^0\.\d\d×$/)
   expect(shortNames([opus!, sonnet!]).get('claude-opus-5-5')).toBe('Opus')
   const rows = costRows(l, opus!)
-  expect(rows[0]).toMatchObject({ name: 'Opus 5.5', x: '1×', note: 'baseline' })
-  expect(rows[1]).toMatchObject({ name: 'Sonnet 5.5' })
+  // most costly first: Opus (the baseline), Sonnet, Haiku
+  expect(rows.map(r => r.name)).toEqual(['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'])
+  expect(rows[0]).toMatchObject({ x: '1×', note: 'baseline' })
   expect(rows[1]!.x).toMatch(/^0\.\d\d×$/)
   expect(rows[1]!.note).toMatch(/^likely /)
 
