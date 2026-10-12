@@ -68,12 +68,8 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   const weekSource = async () => String((await pane.findAll({ type: 'Svg' })).find(x => String(x.props.alt).startsWith('This week, '))?.props.source)
   expect(await weekSource()).toMatch(/fill="none" style="stroke:var\(--muted\)"/)
   expect(await pane.find({ key: 'budget-toggle' })).toBeUndefined()
-  // "Expand all details" opens every card's Details at once; again, closes them
-  await pane.press({ key: 'expand-all' })
-  for (const k of ['week', 'five', 'models']) expect((await pane.find({ key: `details-btn-${k}` }))?.props.label).toBe('Hide details ▴')
-  expect((await pane.find({ key: 'expand-all' }))?.props.label).toBe('Collapse details')
-  await pane.press({ key: 'expand-all' })
-  for (const k of ['week', 'five', 'models']) expect((await pane.find({ key: `details-btn-${k}` }))?.props.label).toBe('Details ▾')
+  // no "Expand all details": each card opens its own
+  expect(await pane.find({ key: 'expand-all' })).toBeUndefined()
   // the models card follows the two limits' cards: where the window's use went, one limit at a time, the costs behind Details
   const alts = async () => (await pane.findAll({ type: 'Svg' })).map(x => String(x.props.alt))
   expect((await alts()).some(a => a.startsWith('Models: where your usage went.'))).toBe(true)
@@ -234,4 +230,37 @@ test('both cards show the last window, on the desktop and in the terminal', asyn
   })
   expect(await band.find({ type: 'Text', text: 'Last window' })).toBeUndefined()
   await band.unmount()
+})
+
+test('the cards fit the pane\'s height where they can', async ($, on) => {
+  mock.store(on)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  const sorted = [...READINGS].sort((a, b) => a[0] - b[0])
+  const clock = mock.clock(on, { now: sorted[0]![0] })
+  for (const [t, kind, pct, resetsAt] of sorted) {
+    await clock.set(t)
+    await $.session.measure({
+      context: {} as never,
+      rateLimits: [{ kind: kind === 1 ? 'seven_day' : 'five_hour', percentUsed: pct, resetsAt: new Date(resetsAt).toISOString() }],
+      changed: ['rateLimits'],
+    })
+  }
+  // a tall pane draws them as designed, with the masthead; a shorter
+  // one leaves the masthead out, then draws the cards smaller
+  const fitted = async (bodyRows: number) => {
+    const p = await $.ui.mount({
+      plugin: 'token-range-monitor', surface: 'desktop', component: 'Pane', requestId: 'token-range-monitor',
+      props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows } } as never,
+    })
+    const svgs = await p.findAll({ type: 'Svg' })
+    const masthead = svgs.some(x => String(x.props.alt).startsWith('Token Range Monitor.'))
+    const weekH = Number(/height="(\d+)"/.exec(String(svgs.find(x => String(x.props.alt).startsWith('This week, '))?.props.source))?.[1])
+    await p.unmount()
+    return { masthead, weekH }
+  }
+  const tall = await fitted(200), mid = await fitted(64), short = await fitted(20)
+  expect(tall.masthead).toBe(true)
+  expect(short.masthead).toBe(false)
+  expect(short.weekH).toBeLessThan(tall.weekH)
+  expect(mid.weekH).toBeGreaterThanOrEqual(short.weekH)
 })

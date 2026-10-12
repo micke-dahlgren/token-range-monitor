@@ -341,8 +341,8 @@ export function costRows(l: Learned, b: ModelCost | null): Array<{ id: string; n
 const colorOf = (f: Family) => (f === 'other' ? C.muted : C[f])
 
 /** The models card's head, `width` wide: its header, with the frame of the split under it on the right. */
-export function modelsHead(sp: UsageSplit | null, width: number, pal: Palettes = DEFAULT_PALETTES): string {
-  const head = cardHeader('model', 'Models', sp ? [{ s: sp.kind === 'five' ? 'This 5-hour window' : 'This week' }] : [], width)
+export function modelsHead(sp: UsageSplit | null, width: number, pal: Palettes = DEFAULT_PALETTES, dense = false): string {
+  const head = cardHeader('model', 'Models', sp ? [{ s: sp.kind === 'five' ? 'This 5-hour window' : 'This week' }] : [], width, dense)
   return drawing(head.svg, Math.ceil(head.y + 4), pal)
 }
 

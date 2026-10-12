@@ -211,6 +211,9 @@ function limitBar(y: number, width: number, pct: number, total: number | null, s
   return { svg: s + row.svg, y: row.y + SIZE.meta * 0.6 }
 }
 
+/** A card's headline size: the design's title size, smaller on a narrow card or a dense one. */
+const headSize = (width: number, dense: boolean) => (dense ? 20 : width < NARROW ? 24 : SIZE.title)
+
 /** The pane's masthead: the mark and the name. */
 export function mastheadSvg(width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const narrow = width < NARROW
@@ -226,6 +229,10 @@ export function mastheadSvg(width: number, pal: Palettes = DEFAULT_PALETTES): st
   return drawing(s, narrow ? 30 : 48, pal)
 }
 
+/** The days' columns' height in px as designed, at a card `width` wide, and the least they're drawn at to fit a short pane. */
+export const daysHeight = (width: number) => (width < NARROW ? 110 : 136)
+export const DAYS_MIN = 72
+
 /** A nice top for the days' scale: a little over the tallest, in whole even points. */
 function scaleTop(max: number): number {
   const v = Math.max(max, 1) * 1.1
@@ -236,18 +243,20 @@ function scaleTop(max: number): number {
  * The weekly card, `width` wide, down to the days' dates: its header; the week's frame (the headline and
  * its range, the whole week as one bar); the days of this window as seven columns on one
  * scale (calendar days; the first and last part days where the reset falls mid-day), past days solid, today solid with its expected rest striped, later days striped, today's and later
- * days' daily budget outlined. The legend and today's frame are drawn apart (`weekLegendSvg`, `todaySvg`).
+ * days' daily budget outlined. The legend and today's frame are drawn apart (`weekLegendSvg`, `todaySvg`). `dense`, for
+ * a pane too short for the cards, draws the header and headline smaller; `shrink`, px the days' columns are drawn
+ * shorter than the design's so the cards fit the pane's height, down to DAYS_MIN.
  */
-export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number, pal: Palettes = DEFAULT_PALETTES): string {
+export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number, pal: Palettes = DEFAULT_PALETTES, dense = false, shrink = 0): string {
   const W = width
   let s = `<defs>${stripes('wk', C.raised)}${stripes('wkd', C.inset)}</defs>`
-  const head = cardHeader('calendar', 'This week', [], W)
+  const head = cardHeader('calendar', 'This week', [], W, dense)
   s += head.svg
   let y = head.y
 
   // ---- the headline, its range, what it's based on ----
   const h = weekHeadline(p)
-  const hs = W < NARROW ? 24 : SIZE.title
+  const hs = headSize(W, dense)
   const badgeW = h.badge ? tw(h.badge, SIZE.meta, 500) + 14 : 0
   const fitsOne = tw(h.head, hs, 600) + (h.badge ? 12 + badgeW : 0) <= W
   // only the figure carries the tone (a %, or a time); the rest of the headline is in the text colour
@@ -283,13 +292,14 @@ export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number,
     const vals = [...past, early ? p.usedToday : p.today, ...(early ? [] : p.later.map(d => d.amount)), early ? 0 : p.budgetPerDay]
     const top = scaleTop(Math.max(...vals))
     const axisW = narrow ? 32 : 36, gap = narrow ? 7 : W < 760 ? 12 : 16
-    const colW = (W - axisW - 4 - gap * (n - 1)) / n, area = narrow ? 110 : 136
+    const colW = (W - axisW - 4 - gap * (n - 1)) / n
+    const tall = Math.max(DAYS_MIN, daysHeight(W) - shrink)
     y += 22
-    const vy = y + 13, base = y + 30 + area
-    const hOf = (v: number) => Math.max(0, Math.min(v, top)) / top * area
+    const vy = y + 13, base = y + 30 + tall
+    const hOf = (v: number) => Math.max(0, Math.min(v, top)) / top * tall
     // the scale: the top and middle as dashed lines, their figures at the left
     for (const [f, label] of [[1, top], [0.5, top / 2], [0, 0]] as const) {
-      const ly = base - f * area
+      const ly = base - f * tall
       if (f > 0) s += `<line x1="${axisW}" x2="${W}" y1="${ly.toFixed(1)}" y2="${ly.toFixed(1)}" style="stroke:${C.line}" stroke-dasharray="3 3"/>`
       s += t(axisW - (narrow ? 6 : 9), ly + SIZE.meta * 0.36, `${one(label)}%`, { size: SIZE.meta, fill: C.muted, anchor: 'end' })
     }
@@ -307,7 +317,7 @@ export function weekCardSvg(p: WeekPlan, past: readonly number[], width: number,
         if (hu > 0) s += `<path d="${hr > 0.5 ? `M${(x + 0.5).toFixed(1)} ${base.toFixed(1)}V${(base - hu).toFixed(1)}H${(x + colW - 0.5).toFixed(1)}V${base.toFixed(1)}` : topRounded(x + 0.5, base - hu, colW - 1, hu, 4)}Z" style="fill:${over ? C.bad : C.accent};stroke:${over ? C.bad : C.accent}"/>`
         v = `${one(p.usedToday)}%`; vFill = over ? C.bad : C.accent
       } else if (early) {
-        s += `<path d="${topRounded(x + 0.5, base - area * 0.4, colW - 1, area * 0.4, 4)}" fill="none" style="stroke:${C.faint}" stroke-dasharray="4 3"/>`
+        s += `<path d="${topRounded(x + 0.5, base - tall * 0.4, colW - 1, tall * 0.4, 4)}" fill="none" style="stroke:${C.faint}" stroke-dasharray="4 3"/>`
         v = '?'
       } else {
         const d = p.later[i - p.k - 1]!, hd = hOf(d.amount)
@@ -362,13 +372,13 @@ export function overBudgetAt(p: WeekPlan): number | null {
  * this pace (its time in red) or that it stays within it; and today's use as one bar on 0–100% of today's
  * budget (`limitBar`): solid for what's used, striped to the prediction, the day's start and end under it.
  */
-export function todaySvg(p: WeekPlan, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+export function todaySvg(p: WeekPlan, width: number, pal: Palettes = DEFAULT_PALETTES, dense = false): string {
   const W = width
   let s = `<defs>${stripes('td', C.raised)}</defs>`
-  const head = cardHeader('bars', 'Today', [], W)
+  const head = cardHeader('bars', 'Today', [], W, dense)
   s += head.svg
   let y = head.y
-  const hs = W < NARROW ? 24 : SIZE.title, over = overBudgetAt(p)
+  const hs = headSize(W, dense), over = overBudgetAt(p)
   const title: Run[] = over === null
     ? [{ s: 'Within today’s budget', fill: C.fg }, { s: ' at this pace', fill: C.fg }]
     : over <= p.now
@@ -376,7 +386,7 @@ export function todaySvg(p: WeekPlan, width: number, pal: Palettes = DEFAULT_PAL
       : [{ s: 'Over budget ', fill: C.fg }, { s: `~${hm(over)}`, fill: C.bad }, { s: ' at this pace', fill: C.fg }]
   const hl = rich(title, 0, y + hs * 1.0, W, hs, 1.35, { weight: 600 })
   s += hl.svg
-  y = hl.y + hs * 0.35 + 27
+  y = hl.y + hs * 0.35 + (dense ? 14 : 27)
   const end = p.dayEnd === p.resetsAt ? `Week resets ${hm(p.dayEnd)}` : 'Ends at midnight'
   const bar = limitBar(y, W, p.usedOfBudget, p.predicted > p.usedOfBudget + 0.05 ? p.predicted : null, 'td', `Started ${hm(p.dayStart)}`, end)
   s += bar.svg
@@ -408,14 +418,14 @@ export function fiveSummary(m: Model): Run[] {
  * The 5-hour card, `width` wide: its header; the cut-off (its time in red) or the reset it lasts to; and the window's
  * use as one bar on that scale (`limitBar`): solid for what's used, striped to where this pace ends up by the reset.
  */
-export function fiveCardSvg(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+export function fiveCardSvg(m: Model, now: number, width: number, pal: Palettes = DEFAULT_PALETTES, dense = false): string {
   const W = width, opened = m.resetsAt - 5 * HOUR
   let s = `<defs>${stripes('fv', C.raised)}</defs>`
-  const head = cardHeader('clock', '5-hour window', [], W)
+  const head = cardHeader('clock', '5-hour window', [], W, dense)
   s += head.svg
   let y = head.y
   const h = fiveHead(m, now), cut = m.noData ? null : cutOff(m, now)
-  const hs = W < NARROW ? 24 : SIZE.title
+  const hs = headSize(W, dense)
   const title: Run[] = cut !== null && m.pct < 100
     ? [{ s: 'Cut off ', fill: C.fg }, { s: `~${hm(cut)}`, fill: C.bad }, { s: ' at this pace', fill: C.fg }]
     : h.tone === 'good'
@@ -427,7 +437,7 @@ export function fiveCardSvg(m: Model, now: number, width: number, pal: Palettes 
   if (m.noData) return drawing(s, Math.ceil(y + 8), pal)
 
   // ---- the window's use as one bar, on the card's scale: used, then where this pace ends up by the reset ----
-  y += 27
+  y += dense ? 14 : 27
   const proj = 100 - m.arrive, bar = limitBar(y, W, m.pct, proj > m.pct ? proj : null, 'fv', `Started ${hm(opened)}`, `Resets ${hm(m.resetsAt)}`)
   s += bar.svg
   y = bar.y

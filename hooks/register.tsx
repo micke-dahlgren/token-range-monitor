@@ -4,7 +4,7 @@ import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 import type { RangeCheck, RangeDay, RangeReading, RangeSettings, RangeStep, RangeSync, RangeWatch } from '../types'
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
-  emptyChartSvg, emptyChartText, fit, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, merge, parseWindow, project, rateText, recordedHours, resetsIn,
+  drawingHeight, emptyChartSvg, emptyChartText, fit, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, merge, parseWindow, project, rateText, recordedHours, resetsIn,
   C, dur, HOUR, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind, DAY,
 } from './range'
 import type { Average, LastWindow, Model, TrackSeg, TrackTone } from './range'
@@ -12,7 +12,7 @@ import { DEFAULT_PALETTES, historyPalettes, palettesFor, resolveTheme } from './
 import { dailyTotals, selfCheck, typicalMiss, weekPlan } from './pace'
 import type { WeekPlan } from './pace'
 import {
-  cutOff, dayEndText, overBudgetAt, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
+  cutOff, DAYS_MIN, dayEndText, daysHeight, overBudgetAt, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
   showsToday, toCome, todaySvg, todayText, weekBarLabels, weekCardSvg, weekHead, weekHeadline, weekLegendSvg, weekPart,
 } from './cards'
 import type { Run } from './ui'
@@ -52,6 +52,12 @@ const INSET = '#00000017'
 const asImage = (svg: string, layout: number) =>
   svg.replace(/^<svg ([^>]*?)width="\d+" height="(\d+)">/, (_, attrs: string, h: string) =>
     `<svg ${attrs}width="${Math.round(layout * ZOOM)}" height="${Math.round(Number(h) * ZOOM)}" viewBox="0 0 ${Math.round(layout)} ${h}" preserveAspectRatio="xMidYMin meet">`)
+/**
+ * The desktop's sizes for fitting the cards to the pane, measured in the app: a row of the pane's reported
+ * `bodyRows` in px, a row of the cards' own padding, margins and gaps in px (drawn smaller than a text row), and
+ * px kept spare under the cards so a small miss in the estimate doesn't scroll.
+ */
+const FIT_PX = { row: 21, native: 13, spare: 8 }
 /** Which cards' Details blocks are open: `week`, `five`, `models`. */
 const details = atom({ plugin: 'token-range-monitor', key: 'details' } as const, [] as string[])
 /** What the pane's sync row shows; sync itself (./sync) keeps it through syncIO. */
@@ -851,13 +857,59 @@ export const register: Register = (on, options) => {
         ]
       }
 
+      /**
+       * How tightly the cards are drawn, so they all fit the pane's height where they can: 0 as designed, 1 without
+       * the masthead (the pane's title names it), 2 with the cards' headers and headlines smaller too. At each level
+       * the weekly card's day columns give up what the rest overruns, down to DAYS_MIN, so the cards fill the
+       * pane rather than leave a step's worth empty under them. Each level's drawings are measured; the native parts
+       * (padding, gaps, strips, the sync line) are counted in rows, at FIT_PX's sizes: an estimate, so a little may
+       * still scroll, and a pane too short even for the densest scrolls.
+       */
+      const showsWeek = !!(plan && week), showsTodayCard = !!(plan && week && showsToday(plan))
+      const weekSvg = (dense: boolean, shrink = 0) => weekCardSvg(plan!, pastDays(plan!), W, pal, dense, shrink)
+      const todayDrawing = (dense: boolean) => todaySvg(plan!, W, pal, dense)
+      const fiveSvg = (dense: boolean) => fiveCardSvg(five!, now, W, pal, dense)
+      const headOfModels = (dense: boolean) => modelsHead(split, W, pal, dense)
+      const usageSvg = split ? modelsUsage(split, W, pal) : null
+      const legendShown = showsWeek && !plan!.noData && plan!.pct < 100
+      const heightAt = (level: number) => {
+        const dense = level >= 2
+        const drawn = [
+          level === 0 ? mastheadSvg(W, pal) : null,
+          showsWeek ? weekSvg(dense) : null,
+          legendShown ? weekLegendSvg(plan!.basis === 'early', pal).svg : null,
+          showsTodayCard ? todayDrawing(dense) : null,
+          five ? fiveSvg(dense) : null,
+          headOfModels(dense),
+          usageSvg,
+        ].reduce((a, svg) => a + (svg ? drawingHeight(svg) : 0), 0)
+        // a card: its padding, the gaps between what's in it, its margin; a strip under it adds its padding and button
+        const cardRows = (items: number, strip: boolean) => 2 + Math.max(0, items - 1) + 1 + (strip ? 3 : 0)
+        const rows = (level === 0 ? 1 : 0)
+          + (showsWeek ? cardRows(legendShown ? 2 : 1, true) : 1)
+          + (showsTodayCard ? cardRows(1, false) : 0)
+          + (five ? cardRows(1, true) : 1)
+          + cardRows(split ? 3 : 2, true)
+          + 2
+          // an open Details: its text and drawings, roughly
+          + ['week', 'five', 'models'].filter(k => open.includes(k)).length * 18
+        return drawn + rows * FIT_PX.native
+      }
+      const room = Math.max(0, (e.props.scroll?.bodyRows ?? 0) * FIT_PX.row - FIT_PX.spare)
+      // what the day columns give up at a level, past which that level doesn't fit
+      const giveUp = (l: number) => Math.max(0, heightAt(l) - room)
+      const slack = legendShown ? daysHeight(W) - DAYS_MIN : 0
+      const level = !room ? 0 : [0, 1].find(l => giveUp(l) <= slack) ?? 2
+      const dense = level >= 2
+      const shrink = room && legendShown ? giveUp(level) : 0
+
       const weekCard = plan && week ? (() => {
         const past = pastDays(plan), hd = weekHead(plan), L = weekBarLabels(plan)
         const alt = `This week, 100% = your weekly limit. ${hd.head}. ${hd.sub} ${plan.noData ? '' : `${[L.used, L.add].filter(Boolean).join(', ')}. ${daysText(plan, past)}.`}`
         const chart = !plan.noData && plan.pct < 100
         const legend = weekLegendSvg(plan.basis === 'early', pal)
         return card('week', [
-          draw('week-card', weekCardSvg(plan, past, W, pal), alt),
+          draw('week-card', weekSvg(dense, shrink), alt),
           chart && (
             <Box key="week-legend-row" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={2}>
               {draw('week-legend', legend.svg, plan.basis === 'early' ? 'Solid: used. Outlined: not known yet.' : 'Solid: used. Striped: expected at your pace.', legend.width)}
@@ -872,11 +924,11 @@ export const register: Register = (on, options) => {
 
       // today, in today's budget: a card of its own under the week's
       const todayCard = plan && week && showsToday(plan)
-        ? card('today', [draw('today-card', todaySvg(plan, W, pal), (() => { const d = todayText(plan); return `Today, 100% = today's budget. ${d.predicted}. ${d.note}` })())])
+        ? card('today', [draw('today-card', todayDrawing(dense), (() => { const d = todayText(plan); return `Today, 100% = today's budget. ${d.predicted}. ${d.note}` })())])
         : null
 
       const fiveCard = five ? card('five', [
-        draw('five-card', fiveCardSvg(five, now, W, pal), (() => { const hd = fiveHead(five, now); return `5-hour window, 100% = your 5-hour limit. ${hd.head}. ${hd.sub}` })()),
+        draw('five-card', fiveSvg(dense), (() => { const hd = fiveHead(five, now); return `5-hour window, 100% = your 5-hour limit. ${hd.head}. ${hd.sub}` })()),
       ], {
         detailsKey: 'five',
         summary: <Box key="summary-five" />,
@@ -884,9 +936,9 @@ export const register: Register = (on, options) => {
       }) : <Text key="no-five" dimColor>No current 5-hour window seen: it shows after your next response.</Text>
 
       const modelsCard = card('models', [
-        draw('models-head', modelsHead(split, W, pal), `Models: where your usage went. ${modelsSummary}`),
+        draw('models-head', headOfModels(dense), `Models: where your usage went. ${modelsSummary}`),
         periodButtons,
-        split && draw('models-usage', modelsUsage(split, W, pal), splitText(split)),
+        split && usageSvg ? draw('models-usage', usageSvg, splitText(split)) : null,
       ], {
         detailsKey: 'models',
         summary: <Box key="summary-models" />,
@@ -897,16 +949,9 @@ export const register: Register = (on, options) => {
         ],
       })
 
-      // "Expand all details": every card's Details at once, or all closed again
-      const ALL = ['week', 'five', 'models']
-      const allOpen = ['week', 'five', 'models'].every(k => open.includes(k))
       return (
         <Box key="cards" flexDirection="column" gap={1}>
-          {draw('masthead', mastheadSvg(W, pal), 'Token Range Monitor. Track your usage, limits, and the time you have left.')}
-          <Box key="toolbar" flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={2}>
-            <Button key="expand-all" plain dimColor label={allOpen ? 'Collapse details' : 'Expand all details'}
-              onPress={() => void update($, details, () => (allOpen ? [] : ALL))} />
-          </Box>
+          {level === 0 && draw('masthead', mastheadSvg(W, pal), 'Token Range Monitor. Track your usage, limits, and the time you have left.')}
           <Box key="pane" flexDirection="column">
             {weekCard}
             {todayCard}
@@ -974,14 +1019,14 @@ export const register: Register = (on, options) => {
      * The days of this window as columns, in % of the weekly limit: each day's figure over its column and its
      * name under it, past days and today solid, the days to come dim at this pace.
      */
-    const dayColumns = (p: WeekPlan) => {
+    const dayColumns = (p: WeekPlan, rows: number) => {
       const early = p.basis === 'early'
       const days = [
         ...pastDays(p).map((v, i) => ({ name: dayName(p.days[i]!.start), v, label: `${one(v)}%`, later: false, today: false })),
         { name: dayName(p.dayStart), v: p.usedToday, label: `${one(p.usedToday)}%`, later: false, today: true },
         ...p.later.map(d => ({ name: dayName(d.start), v: early ? 0 : d.amount, label: early ? '?' : `~${one(d.amount)}%`, later: true, today: false })),
       ]
-      const colW = Math.max(6, Math.min(9, Math.floor(inner / days.length))), rows = 3
+      const colW = Math.max(6, Math.min(9, Math.floor(inner / days.length)))
       const top = Math.max(1, ...days.map(d => d.v))
       const glyph = (v: number, row: number) => {
         const eighths = Math.round(v / top * rows * 8) - row * 8
@@ -1005,6 +1050,22 @@ export const register: Register = (on, options) => {
     const termCard = (key: string, children: Array<JSX.Element | null | false>) => (
       <Box key={`block-${key}`} flexDirection="column" {...cardBox} borderStyle="round" borderColor="userMessageBackground" backgroundColor="userMessageBackground">{children}</Box>
     )
+    /**
+     * The days' columns' rows of bars, so the cards fit the pane's rows where they can: 3, or 1 in a short pane, or
+     * none (0) in one shorter still. The rest is counted: each card's border, its lines, the sync line.
+     */
+    const dayRows = (() => {
+      const room = e.props.scroll?.bodyRows ?? 0
+      if (!room) return 3
+      const weekRows = plan ? 2 + 1 + (plan.noData ? 0 : 2) : 1
+      const todayRows = plan && showsToday(plan) ? 4 : 0
+      const fiveRows = five ? 2 + 1 + (five.noData ? 0 : 2) : 1
+      const modelsRows = 2 + 2 + (split ? 1 + split.models.length + (split.notRecorded >= 0.05 ? 1 : 0) : 0) + (modelsOpen ? 3 + rowsOfCost.length + MODELS_INFO.length + 2 : 0)
+      const rest = weekRows + todayRows + fiveRows + modelsRows + 2
+      const columns = plan && !plan.noData && plan.pct < 100
+      if (!columns) return 3
+      return [3, 1].find(r => rest + 2 + r <= room) ?? 0
+    })()
     // the weekly card: its headline, the week as a bar, its days as columns
     const weekCardTerm = (p: WeekPlan) => {
       const hd = weekHeadline(p), L = weekBarLabels(p)
@@ -1013,7 +1074,7 @@ export const register: Register = (on, options) => {
         titleRow('week-title', 'This week', hd.badge ? `${hd.head} ${hd.badge}` : hd.head, hd.tone),
         bar && bar.bar,
         bar && barFoot('week-foot', bar.missing, `resets ${dayTime(p.resetsAt)}`),
-        !p.noData && p.pct < 100 && dayColumns(p),
+        !p.noData && p.pct < 100 && dayRows > 0 && dayColumns(p, dayRows),
       ])
     }
     // today against its budget, laid out as the 5-hour card

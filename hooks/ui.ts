@@ -116,11 +116,13 @@ export const NARROW = 560
 
 /**
  * A card's header, `width` wide: its icon on a tile, the title beside it, and at the right a figure line
- * (under the title where the card is narrow). The y where the card's body starts comes back.
+ * (under the title where the card is narrow). The y where the card's body starts comes back. `dense`, for a pane
+ * too short for the cards, draws it smaller and closer to the body.
  */
-export function cardHeader(name: Icon, title: string, meta: Run[], width: number): { svg: string; y: number } {
+export function cardHeader(name: Icon, title: string, meta: Run[], width: number, dense = false): { svg: string; y: number } {
   const narrow = width < NARROW
-  const ts = narrow ? 24 : SIZE.title, tileS = narrow ? 39 : 48, gap = narrow ? 11 : 15
+  const ts = dense ? 20 : narrow ? 24 : SIZE.title, tileS = dense ? 32 : narrow ? 39 : 48, gap = dense ? 10 : narrow ? 11 : 15
+  const below = dense ? 14 : 22
   const blockH = ts * 1.25
   const top = Math.max(0, (tileS - blockH) / 2)
   let svg = tile(name, 0, 0, tileS)
@@ -128,13 +130,13 @@ export function cardHeader(name: Icon, title: string, meta: Run[], width: number
   svg += t(tx, top + ts * 1.02, title, { size: ts, weight: 650 })
   const h = Math.max(blockH, tileS)
   const metaW = meta.reduce((a, r) => a + tw(r.s, SIZE.meta, r.weight), 0)
-  if (!meta.length) return { svg, y: h + 22 }
+  if (!meta.length) return { svg, y: h + below }
   if (!narrow && tx + tw(title, ts, 650) + 24 + metaW <= width) {
     svg += rich(meta, width - metaW, h / 2 + SIZE.meta * 0.36, metaW + 40, SIZE.meta, 1.6, { fill: C.muted }).svg
-    return { svg, y: h + 22 }
+    return { svg, y: h + below }
   }
   const m = rich(meta, 0, h + 12 + SIZE.meta, width, SIZE.meta, 1.6, { fill: C.muted })
-  return { svg: svg + m.svg, y: m.y + 18 + 4 }
+  return { svg: svg + m.svg, y: m.y + below }
 }
 
 /**
