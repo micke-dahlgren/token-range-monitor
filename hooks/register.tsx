@@ -902,9 +902,8 @@ export const register: Register = (on, options) => {
       const allOpen = ['week', 'five', 'models'].every(k => open.includes(k))
       return (
         <Box key="cards" flexDirection="column" gap={1}>
-          {draw('masthead', mastheadSvg(W, pal), 'Token Range Monitor. Track your usage, limits, and the time you have left. This week.')}
-          <Box key="toolbar" flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" columnGap={2}>
-            <Text color="inactive">• Usage overview</Text>
+          {draw('masthead', mastheadSvg(W, pal), 'Token Range Monitor. Track your usage, limits, and the time you have left.')}
+          <Box key="toolbar" flexDirection="row" flexWrap="wrap" justifyContent="flex-end" alignItems="center" columnGap={2}>
             <Button key="expand-all" plain dimColor label={allOpen ? 'Collapse details' : 'Expand all details'}
               onPress={() => void update($, details, () => (allOpen ? [] : ALL))} />
           </Box>

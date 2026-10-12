@@ -3,7 +3,7 @@ import { C, DAY, HOUR, LAST_LABEL, drawing, dur, isShort, lastIsShort, lastWindo
 import type { BandPart, LastWindow, Model } from './range'
 import type { WeekPlan } from './pace'
 import { DEFAULT_PALETTES } from './theme'
-import { NARROW, SIZE, cardHeader, icon, metricGrid, rect, rich, stripes, t, tile, topRounded, track, trackLabels, tw } from './ui'
+import { NARROW, SIZE, cardHeader, metricGrid, rect, rich, stripes, t, tile, topRounded, track, trackLabels, tw } from './ui'
 import type { Run } from './ui'
 
 /**
@@ -206,7 +206,7 @@ const TONE = { good: C.accent, bad: C.bad, dim: C.muted }
 /** A frame's label: "This week · 100% = your weekly limit". */
 const frame = (y: number, s: string) => t(0, y, s, { size: SIZE.meta, fill: C.muted })
 
-/** The pane's masthead: the mark, the name and what it's for, and the period it shows. */
+/** The pane's masthead: the mark, and the name and what it's for. */
 export function mastheadSvg(width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const narrow = width < NARROW
   const m = narrow ? 0 : 48, gap = narrow ? 0 : 15
@@ -219,12 +219,6 @@ export function mastheadSvg(width: number, pal: Palettes = DEFAULT_PALETTES): st
   const ts = narrow ? 24 : SIZE.title
   s += t(m + gap, narrow ? 24 : 26, 'Token Range Monitor', { size: ts, weight: 650 })
   s += t(m + gap, narrow ? 46 : 46, 'Track your usage, limits, and the time you have left.', { size: SIZE.meta, fill: C.muted })
-  // the period: a quiet chip at the right, where there's room for it
-  const chip = 'This week', cw = 13 + 16 + 9 + tw(chip, SIZE.meta) + 13
-  if (width - cw > m + gap + tw('Token Range Monitor', ts, 650) + 20) {
-    const x = width - cw
-    s += rect(x, 6, cw, 36, `fill:${C.surface}`, ' rx="8"') + icon('calendar', x + 13, 16, 16, C.muted) + t(x + 13 + 16 + 9, 28.5, chip, { size: SIZE.meta })
-  }
   return drawing(s, 52, pal)
 }
 
