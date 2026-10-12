@@ -91,6 +91,8 @@ Off until you sign in. Without it, each computer only sees its own usage; the re
 3. Choose **Continue with Google** or **Continue with GitHub**.
 4. Repeat on each device with the same account.
 
+Only type a code your own Claude Code showed you, never one someone sent you.
+
 **What's sent**
 - Limit percentages and reset times.
 - When your sessions were active.
