@@ -836,7 +836,7 @@ export const register: Register = (on, options) => {
         detailsKey: 'five',
         summary: <Box key="summary-five" />,
         inner: () => oldInner(five, '5-hour window', null, null),
-      }) : <Text key="no-five" dimColor>No active 5-hour window.</Text>
+      }) : <Text key="no-five" dimColor>No current 5-hour window seen: it shows after your next response.</Text>
 
       const modelsCard = card('models', [
         draw('models-head', modelsHead(learned, base, now, W, pal), `Models, ${learned.since === null ? 'learning' : 'learned from your usage'}: ${modelsSummary}`),
@@ -1001,7 +1001,7 @@ export const register: Register = (on, options) => {
     return (
       <Box key="cards" flexDirection="column">
         {plan ? weekCardTerm(plan) : <Text dimColor>No weekly limit reported.</Text>}
-        {five ? fiveCardTerm(five) : <Text dimColor>No active 5-hour window.</Text>}
+        {five ? fiveCardTerm(five) : <Text dimColor>No current 5-hour window seen: it shows after your next response.</Text>}
         {modelsCard}
         {syncRow(sync)}
       </Box>

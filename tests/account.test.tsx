@@ -35,7 +35,7 @@ test("the record is the signed-in account's: an older record moves under it, ano
     })
     const out = {
       week: (await pane.find({ type: 'Text', text: 'No weekly limit reported.' })) === undefined,
-      five: (await pane.find({ type: 'Text', text: 'No active 5-hour window.' })) === undefined,
+      five: (await pane.find({ type: 'Text', text: 'No current 5-hour window seen: it shows after your next response.' })) === undefined,
     }
     await pane.unmount()
     return out
@@ -77,6 +77,6 @@ test("another copy's store (a marketplace install beside a dev copy) is read too
     plugin: 'token-range-monitor', surface: 'desktop', component: 'Pane', requestId: 'token-range-monitor',
     props: { title: 'Token Range Monitor', isFocused: false, bodyColumns: 100, placement: 'dock' } as never,
   })
-  expect(await pane.find({ type: 'Text', text: 'No active 5-hour window.' })).toBeUndefined()
+  expect(await pane.find({ type: 'Text', text: 'No current 5-hour window seen: it shows after your next response.' })).toBeUndefined()
   await pane.unmount()
 })
