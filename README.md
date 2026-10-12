@@ -4,9 +4,7 @@ A Claude Code mod that tells you, like an electric car's range display, whether 
 
 It watches the weekly and 5-hour usage limits of your Claude Pro or Max subscription. It projects what will be left of each one when it resets, if you keep using Claude at the rate you have been.
 
-<!-- Screenshot: add docs/pane.png and uncomment
-![The Token Range Monitor pane](docs/pane.png)
--->
+<img src="docs/pane.png" alt="The Token Range Monitor pane: this week's projection and its days, today against its budget, the 5-hour window, and where usage went by model" width="460">
 
 ## Install
 
