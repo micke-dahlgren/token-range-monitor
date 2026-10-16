@@ -73,6 +73,10 @@ test('the week part: left at the reset, with its range, running out, and early b
   expect(weekPart(plan(), true)).toMatchObject({ value: '~6% @reset', rest: ' 3d 19h' })
   expect(weekPart(plan({ miss: 12 }), false).value).toBe('~6% left at reset ±12')
   expect(weekPart(plan({ miss: 12 }), true).value).toBe('~6% @reset ±12')
+  // the miss is shown to one decimal, as every figure is
+  expect(weekPart(plan({ miss: 7.505208333333336 }), false).value).toBe('~6% left at reset ±7.5')
+  expect(weekHeadline(plan({ miss: 7.505208333333336 })).badge).toBe('±7.5 pts')
+  expect(missRuns(plan({ miss: 7.25 }))!.map(r => r.s).join('')).toBe('Typical forecast miss: 7.3 points. Read this as between 1.3% short and 13.3% to spare.')
 
   const short = plan({ left: -20, runsOutAt: at(14, 12, 50), early: 22 })
   expect(weekPart(short, false)).toMatchObject({ value: 'runs out Wed ~12:45', rest: ', 22h early', bad: true })

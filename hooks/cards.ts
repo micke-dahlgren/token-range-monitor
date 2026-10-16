@@ -55,7 +55,7 @@ export function weekPart(p: WeekPlan, short: boolean): Part {
       ? { label, value: `out ${p.runsOutToday ? 'today' : when.replace('~', '')}`, rest: '', bad: true, dim: false }
       : { label, value: `runs out ${when}`, rest: `, ${dur(p.early)} early`, bad: true, dim: false }
   }
-  const miss = p.miss ? ` ±${p.miss}` : ''
+  const miss = p.miss ? ` ±${one(p.miss)}` : ''
   return short
     ? { label, value: `~${Math.max(0, Math.round(p.left))}% @reset${miss}`, rest: ` ${dur(leftH)}`, bad: false, dim: false, spare: true, ...tag }
     : { label, value: `~${Math.max(0, Math.round(p.left))}% left at reset${miss}`, rest: `, in ${dur(leftH)}`, bad: false, dim: false, spare: true, ...tag }
@@ -110,9 +110,9 @@ export function weekHead(p: WeekPlan): { head: string; tone: 'good' | 'bad' | 'd
   let sub = basisText(p)
   if (p.miss) {
     const lo = left - p.miss, hi = left + p.miss
-    sub += ` Your projections have typically been off by ${p.miss} points, so read it as ${lo < 0 ? `between ${-lo}% short and ${hi}% to spare` : `${lo}–${hi}% to spare`}.`
+    sub += ` Your projections have typically been off by ${one(p.miss)} points, so read it as ${lo < 0 ? `between ${one(-lo)}% short and ${one(hi)}% to spare` : `${one(lo)}–${one(hi)}% to spare`}.`
   }
-  return { head: `About ${left}% left at the reset${p.miss ? ` ±${p.miss}` : ''}`, tone: 'good', sub }
+  return { head: `About ${left}% left at the reset${p.miss ? ` ±${one(p.miss)}` : ''}`, tone: 'good', sub }
 }
 
 /** What's projected on top of what's used, to the reset: today's rest and the later days. */
@@ -165,7 +165,7 @@ const strong = (s: string, fill: string = C.fg, weight = 600): Run => ({ s, fill
 export function weekHeadline(p: WeekPlan): { head: string; tone: 'good' | 'bad' | 'dim'; badge: string | null } {
   const h = weekHead(p)
   if (h.tone !== 'good') return { head: h.head, tone: h.tone, badge: null }
-  return { head: `About ${Math.max(0, Math.round(p.left))}% left at the reset`, tone: 'good', badge: p.miss ? `±${p.miss} pts` : null }
+  return { head: `About ${Math.max(0, Math.round(p.left))}% left at the reset`, tone: 'good', badge: p.miss ? `±${one(p.miss)} pts` : null }
 }
 
 
@@ -173,7 +173,7 @@ export function weekHeadline(p: WeekPlan): { head: string; tone: 'good' | 'bad' 
 export function missRuns(p: WeekPlan): Run[] | null {
   if (!p.miss || weekHead(p).tone !== 'good') return null
   const left = Math.max(0, Math.round(p.left)), lo = left - p.miss, hi = left + p.miss
-  return [{ s: `Typical forecast miss: ${p.miss} points. Read this as ` }, strong(lo < 0 ? `between ${-lo}% short and ${hi}% to spare.` : `${lo}–${hi}% to spare.`)]
+  return [{ s: `Typical forecast miss: ${one(p.miss)} points. Read this as ` }, strong(lo < 0 ? `between ${one(-lo)}% short and ${one(hi)}% to spare.` : `${one(lo)}–${one(hi)}% to spare.`)]
 }
 
 

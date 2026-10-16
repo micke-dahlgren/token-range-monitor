@@ -213,7 +213,7 @@ export function weekPlan(readings: readonly RangeReading[], seen: readonly Watch
     left, runsOutAt, runsOutToday: runsOutAt !== null && runsOutAt < dayEnd,
     early: runsOutAt === null ? 0 : Math.max(0, (resetsAt - runsOutAt) / HOUR),
     budget, budgetPerDay, predicted: ofBudget(today), usedOfBudget: ofBudget(usedToday),
-    miss: miss !== null && miss > RANGE_OVER ? miss : null,
+    miss: miss !== null && miss > RANGE_OVER ? Math.round(miss * 10) / 10 : null,
     noData: m ? m.noData : null,
   }
 }
