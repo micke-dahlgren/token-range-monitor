@@ -1,3 +1,4 @@
+import type { SessionContextBreakdown } from 'claude-code'
 import type { Palettes, RangeDay } from '../types'
 import { C, DAY, HOUR, LAST_LABEL, drawing, dur, isShort, lastIsShort, lastWindowText, rateText, spare } from './range'
 import type { BandPart, LastWindow, Model } from './range'
@@ -450,6 +451,90 @@ export function fiveCardSvg(m: Model, now: number, width: number, pal: Palettes 
   s += bar.svg
   y = bar.y
   return drawing(s, Math.ceil(y + 4), pal)
+}
+
+// ---- the context card ----
+
+/** The live window as the context card shows it: how full, what it's made of, how much the cache served, a verdict. */
+export type ContextView = {
+  /** Tokens in use over the compaction window, 0–100 and past it. */
+  pct: number
+  window: number
+  /** The conversation itself: the breakdown's Messages row. */
+  chat: number
+  /** Skills, slash commands, MCP tools in the window and custom agents: what plugins and settings add. */
+  ext: number
+  /** The rest in use: the system prompt, the built-in tools, CLAUDE.md files. */
+  system: number
+  /** The last response's share of its input the cache served, 0–100; null before a response. */
+  cached: number | null
+  verdict: 'Fine' | 'Compact' | 'Clear'
+}
+
+/**
+ * The breakdown as the card's figures. The verdict: under half full it's Fine; past that, a cache that served under
+ * half the last input has lapsed, so the next turn pays for the whole window again and a fresh start (Clear) costs
+ * the least; three quarters full and warm, Compact; otherwise Fine.
+ */
+export function contextView(b: SessionContextBreakdown): ContextView {
+  const used = b.categories.filter(c => c.kind === 'used')
+  // the conversation's row; the API reconciles it to the last response
+  const chat = used.find(c => c.name === 'Messages')?.tokens ?? 0
+  const ext = (b.skills?.tokens ?? 0) + (b.slashCommands?.tokens ?? 0) + b.agents.reduce((a, x) => a + x.tokens, 0)
+    + b.mcpTools.filter(x => x.isLoaded).reduce((a, x) => a + x.tokens, 0)
+  const system = Math.max(0, used.reduce((a, c) => a + c.tokens, 0) - chat - ext)
+  const u = b.apiUsage, input = u ? u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens : 0
+  const cached = u && input ? u.cache_read_input_tokens / input * 100 : null
+  const pct = b.percentage
+  const verdict = pct < 50 ? 'Fine' : cached !== null && cached < 50 ? 'Clear' : pct >= 75 ? 'Compact' : 'Fine'
+  return { pct, window: b.rawMaxTokens, chat, ext, system, cached, verdict }
+}
+
+/** Tokens in thousands, as /context shows them: 1.2k, 18k. */
+export const kTokens = (n: number) => (n < 1000 ? String(Math.round(n)) : n < 10_000 ? `${one(n / 1000)}k` : `${Math.round(n / 1000)}k`)
+
+/** The context card's three parts, in the bar's order: label, tokens, fill. */
+export const contextParts = (v: ContextView) => [
+  { label: 'Chat', tokens: v.chat, fill: C.info },
+  { label: 'Plugins & skills', tokens: v.ext, fill: `${C.info};fill-opacity:.45` },
+  { label: 'System', tokens: v.system, fill: C.muted },
+]
+
+/**
+ * The context card, `width` wide: its header with the cached share at the right; the verdict in one word (red unless
+ * Fine) and how full the window is; the window as one bar of its parts; under it each part's tokens.
+ */
+export function contextCardSvg(v: ContextView, width: number, pal: Palettes = DEFAULT_PALETTES, dense = false): string {
+  const W = width
+  const meta: Run[] = v.cached === null ? [] : [strong(`${Math.round(v.cached)}%`, C.fg, 500), { s: ' cached' }]
+  const head = cardHeader('folder', 'Context', meta, W, dense)
+  let s = head.svg, y = head.y
+  const hs = headSize(W, dense)
+  const hl = rich([{ s: v.verdict, fill: v.verdict === 'Fine' ? C.accent : C.bad }, { s: ` · ${Math.round(v.pct)}% full`, fill: C.fg }], 0, y + hs, W, hs, 1.35, { weight: 600 })
+  s += hl.svg
+  y = hl.y + hs * 0.35 + (dense ? 14 : 27)
+  const BW = W - 2, BH = 24
+  s += rect(0, y, BW, BH, `fill:${C.raised}`, ' rx="5"')
+  // the parts side by side from the left, each its share of the window, clipped to the track's rounded ends
+  let x = 0, parts = ''
+  for (const p of contextParts(v)) {
+    const w = Math.min(BW - x, BW * p.tokens / Math.max(1, v.window))
+    if (w > 0) parts += rect(x, y, w, BH, `fill:${p.fill}`)
+    x += Math.max(0, w)
+  }
+  s += `<clipPath id="ctx"><rect x="0" y="${y}" width="${BW}" height="${BH}" rx="5"/></clipPath><g clip-path="url(#ctx)">${parts}</g>`
+  y += BH + 8 + SIZE.meta * 1.15
+  // the legend: a swatch and each part's tokens, onto a second line where they don't fit
+  let lx = 0
+  for (const p of contextParts(v)) {
+    const runs: Run[] = [{ s: `${p.label} ` }, strong(kTokens(p.tokens), C.fg, 500)]
+    const w = 14 + runs.reduce((a, r) => a + tw(r.s, SIZE.meta, r.weight ?? 400), 0)
+    if (lx && lx + w > W) { lx = 0; y += SIZE.meta * 1.6 }
+    s += rect(lx, y - SIZE.meta * 0.75, 9, 9, `fill:${p.fill}`, ' rx="2"')
+    s += rich(runs, lx + 14, y, w + 40, SIZE.meta, 1.6, { fill: C.muted }).svg
+    lx += w + 18
+  }
+  return drawing(s, Math.ceil(y + SIZE.meta * 0.6 + 4), pal)
 }
 
 /** A 1.3 head's figures, as the Details' grid shows them: the two paces, the last window. */

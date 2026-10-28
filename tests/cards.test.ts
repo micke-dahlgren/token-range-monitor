@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { RangeReading } from '../types'
 import {
-  fiveCardSvg, fiveHead, fivePart, fiveSummary, hm, missRuns, partsWidth,
+  contextCardSvg, contextView, fiveCardSvg, fiveHead, fivePart, fiveSummary, hm, missRuns, partsWidth,
   overBudgetAt, todaySvg, todayText, weekCardSvg, weekHead, weekHeadline, weekLegendSvg, weekPart,
 } from '../hooks/cards'
 import { windowDays } from '../hooks/pace'
@@ -165,4 +165,26 @@ test('the weekly card: every % names its 100%, and today is in today’s budget'
 test('a day is short of a week: the reset countdown and day boundaries line up', () => {
   expect(DAY).toBe(24 * HOUR)
   expect(hm(at(10, 11) + DAY)).toBe('11:00')
+})
+
+test('the context card splits the window into chat, plugins and skills, and system, with the cache and a verdict', () => {
+  const b = (pct: number, read: number, uncached: number) => ({
+    categories: [
+      { name: 'System prompt', tokens: 4_000, kind: 'used' },
+      { name: 'Skills', tokens: 3_000, kind: 'used' },
+      { name: 'MCP tools', tokens: 2_000, kind: 'used' },
+      { name: 'Messages', tokens: 50_000, kind: 'used' },
+      { name: 'MCP tools (deferred)', tokens: 9_000, kind: 'deferred' },
+      { name: 'Free space', tokens: 100_000, kind: 'free' },
+    ],
+    skills: { tokens: 3_000 }, slashCommands: undefined, agents: [], mcpTools: [{ tokens: 2_000, isLoaded: true }, { tokens: 9_000, isLoaded: false }],
+    percentage: pct, rawMaxTokens: 200_000,
+    apiUsage: { input_tokens: uncached, cache_read_input_tokens: read, cache_creation_input_tokens: 0, output_tokens: 10 },
+  }) as never
+  const v = contextView(b(30, 45_000, 5_000))
+  expect([v.chat, v.ext, v.system, v.cached, v.verdict]).toEqual([50_000, 5_000, 4_000, 90, 'Fine'])
+  expect(contextView(b(80, 45_000, 5_000)).verdict).toBe('Compact')
+  // a lapsed cache past half full: start afresh
+  expect(contextView(b(60, 5_000, 45_000)).verdict).toBe('Clear')
+  expect(contextCardSvg(v, 400)).toContain('90%')
 })

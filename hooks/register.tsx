@@ -12,7 +12,7 @@ import { CLAUDE_BLUE, DEFAULT_PALETTES, historyPalettes, palettesFor, resolveThe
 import { dailyTotals, selfCheck, typicalMiss, weekPlan } from './pace'
 import type { WeekPlan } from './pace'
 import {
-  contextBarSvg, cutOff, DAYS_MIN, dayEndText, daysHeight, overBudgetAt, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
+  contextBarSvg, contextCardSvg, contextParts, contextView, cutOff, kTokens, DAYS_MIN, dayEndText, daysHeight, overBudgetAt, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
   showsToday, toCome, todaySvg, todayText, weekBarLabels, weekCardSvg, weekHead, weekHeadline, weekLegendSvg, weekPart,
 } from './cards'
 import type { Run } from './ui'
@@ -722,6 +722,9 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const sync = await read($, syncView)
+    // the live window by category, estimated locally ('summary' sends nothing)
+    const ctxB = await $.session.usage({ breakdown: 'summary' }).then(u => u?.context?.breakdown, () => undefined)
+    const ctx = ctxB ? contextView(ctxB) : null
     // the real time for the sync row's texts: `now` is the drawings', rounded up to the minute
     const clockNow = await $.clock.now()
     // the terminal draws no Svg: there the cards are text
@@ -898,6 +901,7 @@ export const register: Register = (on, options) => {
       const weekSvg = (dense: boolean, shrink = 0) => weekCardSvg(plan!, pastDays(plan!), W, pal, dense, shrink)
       const todayDrawing = (dense: boolean) => todaySvg(plan!, W, pal, dense)
       const fiveSvg = (dense: boolean) => fiveCardSvg(five!, now, W, pal, dense)
+      const ctxSvg = (dense: boolean) => contextCardSvg(ctx!, W, pal, dense)
       const headOfModels = (dense: boolean) => modelsHead(split, W, pal, dense)
       const usageSvg = split ? modelsUsage(split, W, pal) : null
       const legendShown = showsWeek && !plan!.noData && plan!.pct < 100
@@ -909,6 +913,7 @@ export const register: Register = (on, options) => {
           legendShown ? weekLegendSvg(plan!.basis === 'early', pal).svg : null,
           showsTodayCard ? todayDrawing(dense) : null,
           five ? fiveSvg(dense) : null,
+          ctx ? ctxSvg(dense) : null,
           headOfModels(dense),
           usageSvg,
         ].reduce((a, svg) => a + (svg ? drawingHeight(svg) : 0), 0)
@@ -918,6 +923,7 @@ export const register: Register = (on, options) => {
           + (showsWeek ? cardRows(legendShown ? 2 : 1, true) : 1)
           + (showsTodayCard ? cardRows(1, false) : 0)
           + (five ? cardRows(1, true) : 1)
+          + (ctx ? cardRows(1, false) : 0)
           + cardRows(split ? 3 : 2, true)
           + 2
           // an open Details: its text and drawings, roughly
@@ -964,6 +970,11 @@ export const register: Register = (on, options) => {
         inner: () => oldInner(five, '5-hour window', null, null),
       }) : <Text key="no-five" dimColor>No current 5-hour window seen: it shows after your next response.</Text>
 
+      const contextCard = ctx
+        ? card('context', [draw('context-card', ctxSvg(dense),
+          `Context: ${ctx.verdict}, ${Math.round(ctx.pct)}% full${ctx.cached === null ? '' : `, ${Math.round(ctx.cached)}% cached`}. ${contextParts(ctx).map(p => `${p.label} ${kTokens(p.tokens)}`).join(', ')}.`)])
+        : null
+
       const modelsCard = card('models', [
         draw('models-head', headOfModels(dense), `Models: where your usage went. ${modelsSummary}`),
         periodButtons,
@@ -985,6 +996,7 @@ export const register: Register = (on, options) => {
             {weekCard}
             {todayCard}
             {fiveCard}
+            {contextCard}
             {modelsCard}
             {syncRow(sync)}
           </Box>
@@ -1090,7 +1102,8 @@ export const register: Register = (on, options) => {
       const todayRows = plan && showsToday(plan) ? 4 : 0
       const fiveRows = five ? 2 + 1 + (five.noData ? 0 : 2) : 1
       const modelsRows = 2 + 2 + (split ? 1 + split.models.length + (split.notRecorded >= 0.05 ? 1 : 0) : 0) + (modelsOpen ? 3 + rowsOfCost.length + MODELS_INFO.length + 2 : 0)
-      const rest = weekRows + todayRows + fiveRows + modelsRows + 2
+      const ctxRows = ctx ? 5 : 0
+      const rest = weekRows + todayRows + fiveRows + ctxRows + modelsRows + 2
       const columns = plan && !plan.noData && plan.pct < 100
       if (!columns) return 3
       return [3, 1].find(r => rest + 2 + r <= room) ?? 0
@@ -1127,6 +1140,26 @@ export const register: Register = (on, options) => {
         titleRow('five-title', '5-hour window', head, hd.tone),
         bar && bar.bar,
         bar && barFoot('five-foot', bar.missing, `resets ${hm(m.resetsAt)}`),
+      ])
+    }
+    // the context card: the verdict and how full, the window's parts as one bar, each part's tokens under it
+    const contextCardTerm = (v: NonNullable<typeof ctx>) => {
+      const parts = contextParts(v), colour = [CLAUDE_BLUE, 'suggestion', 'inactive'] as const
+      let used = 0
+      const segs = parts.map((p, i) => {
+        const c = Math.min(inner - used, Math.round(inner * p.tokens / Math.max(1, v.window)))
+        used += c
+        return <Text key={`cb-${i}`} color={colour[i]}>{'█'.repeat(c)}</Text>
+      })
+      return termCard('context', [
+        titleRow('context-title', 'Context', `${v.verdict} · ${Math.round(v.pct)}%`, v.verdict === 'Fine' ? 'good' : 'bad'),
+        <Box key="context-bar" flexDirection="row">{segs}<Text color="subtle">{'░'.repeat(Math.max(0, inner - used))}</Text></Box>,
+        <Box key="context-foot" flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+          <Box flexDirection="row" columnGap={2}>
+            {parts.map((p, i) => <Text key={`cl-${i}`} color={colour[i]}>{`■ `}<Text dimColor>{`${p.label} ${kTokens(p.tokens)}`}</Text></Text>)}
+          </Box>
+          {v.cached !== null && <Text dimColor>{`${Math.round(v.cached)}% cached`}</Text>}
+        </Box>,
       ])
     }
     const detailsButton = (key: string) => (
@@ -1181,6 +1214,7 @@ export const register: Register = (on, options) => {
         {plan ? weekCardTerm(plan) : <Text dimColor>No weekly limit reported.</Text>}
         {plan && showsToday(plan) && todayCardTerm(plan)}
         {five ? fiveCardTerm(five) : <Text dimColor>No current 5-hour window seen: it shows after your next response.</Text>}
+        {ctx && contextCardTerm(ctx)}
         {modelsCard}
         {syncRow(sync)}
       </Box>
