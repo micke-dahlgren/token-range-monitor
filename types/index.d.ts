@@ -32,6 +32,8 @@ export type Palette = {
   good: string
   /** A colour per model family. */
   fable: string; opus: string; sonnet: string; haiku: string
+  /** Claude's blue (the app's `--accent-100`): the context bar. */
+  info: string
   /** The card's surfaces, as the pane's design names them: the card, a raised chip, the inset strip, the panel within. */
   surface: string; raised: string; inset: string; panel: string; line: string
   /** Its inks: muted and faint text, the accent and its tint, what's short and its tint, the neutral solid grey. */

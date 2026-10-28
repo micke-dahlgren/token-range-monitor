@@ -529,7 +529,7 @@ export function paceText(m: Model): string | null {
 /** The card's colours, as CSS variables a chart's <style> sets from the person's theme (see theme.ts). */
 export const C = Object.fromEntries(
   (['card', 'veil', 'fg', 'dim', 'off', 'barTop', 'barBottom', 'limit', 'over', 'under', 'bad', 'good', 'fable', 'opus', 'sonnet', 'haiku',
-    'surface', 'raised', 'inset', 'panel', 'line', 'muted', 'faint', 'accent', 'accentBg', 'badBg', 'solid'] as const).map(k => [k, v(k)]),
+    'surface', 'raised', 'inset', 'panel', 'line', 'muted', 'faint', 'accent', 'accentBg', 'badBg', 'solid', 'info'] as const).map(k => [k, v(k)]),
 ) as Record<PaletteKey, string>
 /** The system's own sans, as the pane's design sets it; figures in it line up (tabular numbers, see `drawing`). */
 export const FONT = "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"

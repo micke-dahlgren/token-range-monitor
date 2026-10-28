@@ -127,6 +127,9 @@ function legible(c: RGB, bg: RGB, toward: RGB, min: number): RGB {
 
 // ---- the palette ----
 
+/** Claude's blue: the desktop app's `--accent-100`, hsl(210 70.9% 51.6%). */
+export const CLAUDE_BLUE = '#2c84db'
+
 export type PaletteKey = keyof Palette
 
 /** The design's inks for each appearance: what the built-in presets draw with. */
@@ -195,6 +198,8 @@ export function derivePalette(t: Tokens): Palette {
     opus: accent,
     sonnet: on(ink('claude', d.sonnet, mix(k.claude, k.inactive, 0.7)), 3),
     haiku: on(ink('inactive', d.haiku), 3),
+    // Claude's blue, as the app's --accent-100 (hsl(210 70.9% 51.6%)) in both appearances
+    info: CLAUDE_BLUE,
   }
 }
 

@@ -5,14 +5,14 @@ import type { RangeCheck, RangeDay, RangeReading, RangeSettings, RangeStep, Rang
 import {
   DEFAULT_SETTINGS, KEEP, MIN, heartbeat, MIN_RECORDED_H, UNIT_MAX, UNIT_MIN, averageName, clampWindow, averageNote, chosenAverage,
   drawingHeight, emptyChartSvg, emptyChartText, fit, fiveChart, LAST_INFO, LAST_LABEL, lastIsShort, lastWindow, lastWindowNote, lastWindowText, merge, parseWindow, project, rateText, recordedHours, resetsIn,
-  C, dur, HOUR, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind, DAY,
+  C, CELL_PX, dur, HOUR, isShort, leftText, paceText, rangeTrack, rateShort, refine, runsOut, weekChart, windowHours, isStale, ofKind, DAY,
 } from './range'
 import type { Average, LastWindow, Model, TrackSeg, TrackTone } from './range'
-import { DEFAULT_PALETTES, historyPalettes, palettesFor, resolveTheme } from './theme'
+import { CLAUDE_BLUE, DEFAULT_PALETTES, historyPalettes, palettesFor, resolveTheme } from './theme'
 import { dailyTotals, selfCheck, typicalMiss, weekPlan } from './pace'
 import type { WeekPlan } from './pace'
 import {
-  cutOff, DAYS_MIN, dayEndText, daysHeight, overBudgetAt, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
+  contextBarSvg, cutOff, DAYS_MIN, dayEndText, daysHeight, overBudgetAt, dayName, daysText, dayTime, hm, fiveCardSvg, fiveHead, fivePart, mastheadSvg, oldFigures, one, partsWidth, pastDays,
   showsToday, toCome, todaySvg, todayText, weekBarLabels, weekCardSvg, weekHead, weekHeadline, weekLegendSvg, weekPart,
 } from './cards'
 import type { Run } from './ui'
@@ -648,9 +648,11 @@ export const register: Register = (on, options) => {
   // C: one line above the prompt
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const { plan, five, now } = await models($)
+    const { plan, five, now, pal } = await models($)
     if (!plan && !five) return next(e)
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button } = els
+    const Svg = e.surface !== 'terminal' && 'Svg' in els ? els.Svg : null
     const partsOf = (short: boolean) => [
       ...(plan ? [{ key: 'week', part: weekPart(plan, short) }] : []),
       ...(five ? [{ key: 'five', part: fivePart(five, now, short) }] : []),
@@ -674,8 +676,7 @@ export const register: Register = (on, options) => {
     // the session's context window, as a thin bar under the line once a response has reported its fill
     // a host with no usage to give draws the line alone
     const ctx = await $.session.usage().then(u => u?.context?.percent, () => undefined)
-    const label = ctx === undefined ? '' : ` context ${Math.round(ctx)}%`
-    const cells = Math.max(10, e.props.bodyColumns - label.length), full = ctx === undefined ? 0 : Math.round(cells * Math.min(100, ctx) / 100)
+    const cells = Math.max(10, e.props.bodyColumns), full = ctx === undefined ? 0 : Math.round(cells * Math.min(100, ctx) / 100)
     return (
       <Box flexDirection="column" width="100%">
         <Box key="band-line" flexDirection="row" flexWrap="wrap" width="100%" justifyContent="space-between" columnGap={1} alignItems="center">
@@ -686,11 +687,15 @@ export const register: Register = (on, options) => {
             <Button key="details" label="Details ↗" onPress={() => void openPane($)} />
           </Box>
         </Box>
-        {ctx !== undefined && (
+        {ctx !== undefined && Svg && (
           <Box key="band-context" flexDirection="row">
-            <Text color={ctx > 80 ? 'warning' : undefined} dimColor={ctx <= 80}>{'━'.repeat(full)}</Text>
+            {(() => { const w = Math.floor(e.props.bodyColumns * CELL_PX.w); return <Svg source={asImage(contextBarSvg(ctx, w, pal), w)} alt={`Context window ${Math.round(ctx)}% used`} /> })()}
+          </Box>
+        )}
+        {ctx !== undefined && !Svg && (
+          <Box key="band-context" flexDirection="row">
+            <Text color={ctx > 80 ? 'warning' : CLAUDE_BLUE}>{'━'.repeat(full)}</Text>
             <Text color="subtle">{'─'.repeat(cells - full)}</Text>
-            <Text dimColor>{label}</Text>
           </Box>
         )}
       </Box>

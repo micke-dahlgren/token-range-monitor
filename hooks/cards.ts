@@ -214,6 +214,14 @@ function limitBar(y: number, width: number, pct: number, total: number | null, s
 /** A card's headline size: the design's title size, smaller on a narrow card or a dense one. */
 const headSize = (width: number, dense: boolean) => (dense ? 20 : width < NARROW ? 24 : SIZE.title)
 
+/** The context window's fill as a bare 3px line, `width` wide: the track, and the used part in Claude's blue (the over colour past 80%). */
+export function contextBarSvg(percent: number, width: number, pal: Palettes = DEFAULT_PALETTES): string {
+  const used = width * Math.min(100, Math.max(0, percent)) / 100
+  // a few pixels above the line, to part it from the text row over it
+  const top = 4
+  return drawing(rect(0, top, width, 3, `fill:${C.line}`, ' rx="1.5"') + rect(0, top, used, 3, `fill:${percent > 80 ? C.over : C.info}`, ' rx="1.5"'), top + 3, pal)
+}
+
 /** The pane's masthead: the mark and the name. */
 export function mastheadSvg(width: number, pal: Palettes = DEFAULT_PALETTES): string {
   const narrow = width < NARROW

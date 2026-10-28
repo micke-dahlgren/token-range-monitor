@@ -19,13 +19,13 @@ test('the band draws the context window as a thin bar under its line', async ($,
   expect(await band.find({ key: 'band-context' })).toBeUndefined()
   await band.unmount()
 
-  // 34% of the window: a third of the bar filled, and the figure beside it
+  // 34% of the window: a third of the bar filled, with no label
   context = { window: 200_000, tokens: 68_000, percent: 34 }
   await $.session.measure({ context, rateLimits: limits, changed: ['context'] })
   band = await mount()
   expect(await band.find({ key: 'band-context' })).toBeDefined()
-  expect(await band.find({ type: 'Text', text: ' context 34%' })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /context/ })).toBeUndefined()
   const filled = (await band.find({ type: 'Text', text: /^━+$/ }))?.text ?? ''
-  expect(filled.length).toBe(Math.round((60 - ' context 34%'.length) * 0.34))
+  expect(filled.length).toBe(Math.round(60 * 0.34))
   await band.unmount()
 })
