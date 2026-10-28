@@ -26,7 +26,7 @@ import type { Lists, Platform, SyncIO } from './sync'
 
 const PANE = 'token-range-monitor'
 /** The mod's version, shown in the pane's title: keep it in step with `.claude-plugin/plugin.json`. */
-const VERSION = '1.4.8'
+const VERSION = '1.4.9'
 const TITLE = `Token Range Monitor ${VERSION}`
 const readings = atom({ plugin: 'token-range-monitor', key: 'readings' } as const, [])
 const settings = atom({ plugin: 'token-range-monitor', key: 'settings' } as const, DEFAULT_SETTINGS)
