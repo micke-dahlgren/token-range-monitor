@@ -602,6 +602,8 @@ export const register: Register = (on, options) => {
   // the once-a-minute check above only re-reads the last response's figures, so it isn't watching
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('rateLimits')) await capture($, e.rateLimits)
+    // the band's context bar follows the window's fill
+    else if (e.changed.includes('context')) await update($, tick, n => n + 1)
     await watch($)
     return next(e)
   })
@@ -655,20 +657,42 @@ export const register: Register = (on, options) => {
     ]
     // the full line where it fits, else the short one, so the band stays one line in a narrow column
     const short = partsWidth(partsOf(false).map(x => x.part)) > e.props.bodyColumns
+    const parts = partsOf(short)
+    // the week at the left, the 5-hour window and Details at the right; a dot between them only when they're
+    // close enough to read as one figure (partsWidth counts " · " between parts, so take those out again)
+    const room = e.props.bodyColumns - (partsWidth(parts.map(x => x.part)) - 3 * (parts.length - 1))
+    const dot = parts.length > 1 && room < 6
+    const partBox = ({ key, part: p }: (typeof parts)[number]) => (
+      <Box key={`band-${key}`} flexDirection="row">
+        <Text dimColor>{p.label} </Text>
+        <Text bold dimColor={p.dim} color={p.dim ? undefined : p.spare ? 'success' : 'claude'}>{p.value}</Text>
+        {p.rest && <Text dimColor>{p.rest}</Text>}
+        {p.tag && <Text key={`tag-${key}`} dimColor>{` ${p.tag}`}</Text>}
+      </Box>
+    )
+    const [first, ...rest] = parts
+    // the session's context window, as a thin bar under the line once a response has reported its fill
+    // a host with no usage to give draws the line alone
+    const ctx = await $.session.usage().then(u => u?.context?.percent, () => undefined)
+    const label = ctx === undefined ? '' : ` context ${Math.round(ctx)}%`
+    const cells = Math.max(10, e.props.bodyColumns - label.length), full = ctx === undefined ? 0 : Math.round(cells * Math.min(100, ctx) / 100)
     return (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center">
-        {partsOf(short).flatMap(({ key, part: p }, i) => {
-          return [
-            ...(i ? [<Text key={`sep-${key}`} dimColor>·</Text>] : []),
-            <Box key={`band-${key}`} flexDirection="row">
-              <Text dimColor>{p.label} </Text>
-              <Text bold dimColor={p.dim} color={p.dim ? undefined : p.spare ? 'success' : 'claude'}>{p.value}</Text>
-              {p.rest && <Text dimColor>{p.rest}</Text>}
-              {p.tag && <Text key={`tag-${key}`} dimColor>{` ${p.tag}`}</Text>}
-            </Box>,
-          ]
-        })}
-        <Button key="details" label="Details ↗" onPress={() => void openPane($)} />
+      <Box flexDirection="column" width="100%">
+        <Box key="band-line" flexDirection="row" flexWrap="wrap" width="100%" justifyContent="space-between" columnGap={1} alignItems="center">
+          {first && partBox(first)}
+          <Box key="band-right" flexDirection="row" columnGap={1} alignItems="center">
+            {dot && <Text key="sep" dimColor>·</Text>}
+            {rest.map(partBox)}
+            <Button key="details" label="Details ↗" onPress={() => void openPane($)} />
+          </Box>
+        </Box>
+        {ctx !== undefined && (
+          <Box key="band-context" flexDirection="row">
+            <Text color={ctx > 80 ? 'warning' : undefined} dimColor={ctx <= 80}>{'━'.repeat(full)}</Text>
+            <Text color="subtle">{'─'.repeat(cells - full)}</Text>
+            <Text dimColor>{label}</Text>
+          </Box>
+        )}
       </Box>
     )
   })

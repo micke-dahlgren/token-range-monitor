@@ -21,20 +21,20 @@ const five = (opened: number, now: number, pct: number) => {
 test('the 5-hour part reads in clock times: a cut-off, lasting to the reset, a reset after midnight', () => {
   // 64% in 2h 50m: 22.6% an hour, out at ~17:36, before the 18:10 reset
   const now = at(10, 16), cut = five(at(10, 13, 10), now, 64)
-  expect(fivePart(cut, now, false)).toMatchObject({ value: 'cut off ~17:36', rest: ', resets 18:10', bad: true })
+  expect(fivePart(cut, now, false)).toMatchObject({ value: 'cut off 17:36', rest: ', resets 18:10', bad: true })
   expect(fivePart(cut, now, true)).toMatchObject({ value: 'out 17:36', rest: '' })
   expect(fiveHead(cut, now).head).toBe('Cut off ~17:36 at this pace')
   expect(fiveHead(cut, now).sub).toBe('64% used since 13:10, 22.6% an hour. It resets at 18:10, 34m after the cut-off.')
 
   // 3% in 20 minutes lasts: 9% an hour for the 4h 40m left
   const calm = five(at(11, 10, 40), at(11, 11), 3)
-  expect(fivePart(calm, at(11, 11), false)).toMatchObject({ value: '~55% left at 15:40', rest: '', bad: false, spare: true })
-  expect(fivePart(calm, at(11, 11), true)).toMatchObject({ value: '~55% @15:40', rest: '' })
+  expect(fivePart(calm, at(11, 11), false)).toMatchObject({ value: '55% left at 15:40', rest: '', bad: false, spare: true })
+  expect(fivePart(calm, at(11, 11), true)).toMatchObject({ value: '55% @15:40', rest: '' })
   expect(fiveHead(calm, at(11, 11)).head).toBe('Lasts to the reset at 15:40')
 
   // opened 19:40, read at 22:00 with 52% used: out after midnight, at 00:09, the reset at 00:40
   const late = five(at(10, 19, 40), at(10, 22), 52)
-  expect(fivePart(late, at(10, 22), false)).toMatchObject({ value: 'cut off ~00:09', rest: ', resets 00:40' })
+  expect(fivePart(late, at(10, 22), false)).toMatchObject({ value: 'cut off 00:09', rest: ', resets 00:40' })
   expect(hm(late.resetsAt)).toBe('00:40')
 
   // the drawing names the cut-off's time, and its bar is the window's use: used, then this pace's addition
@@ -69,17 +69,17 @@ const plan = (o: Partial<WeekPlan> = {}): WeekPlan => ({
 })
 
 test('the week part: left at the reset, with its range, running out, and early before a whole day is on record', () => {
-  expect(weekPart(plan(), false)).toMatchObject({ label: 'Week', value: '~6% left at reset', rest: ', in 3d 19h', bad: false, spare: true })
-  expect(weekPart(plan(), true)).toMatchObject({ value: '~6% @reset', rest: ' 3d 19h' })
-  expect(weekPart(plan({ miss: 12 }), false).value).toBe('~6% left at reset ±12')
-  expect(weekPart(plan({ miss: 12 }), true).value).toBe('~6% @reset ±12')
+  expect(weekPart(plan(), false)).toMatchObject({ label: 'Week', value: '6% left at reset', rest: ', in 3d 19h', bad: false, spare: true })
+  expect(weekPart(plan(), true)).toMatchObject({ value: '6% @reset', rest: ' 3d 19h' })
+  expect(weekPart(plan({ miss: 12 }), false).value).toBe('6% left at reset ±12')
+  expect(weekPart(plan({ miss: 12 }), true).value).toBe('6% @reset ±12')
   // the miss is shown to one decimal, as every figure is
-  expect(weekPart(plan({ miss: 7.505208333333336 }), false).value).toBe('~6% left at reset ±7.5')
+  expect(weekPart(plan({ miss: 7.505208333333336 }), false).value).toBe('6% left at reset ±7.5')
   expect(weekHeadline(plan({ miss: 7.505208333333336 })).badge).toBe('±7.5 pts')
   expect(missRuns(plan({ miss: 7.25 }))!.map(r => r.s).join('')).toBe('Typical forecast miss: 7.3 points. Read this as between 1.3% short and 13.3% to spare.')
 
   const short = plan({ left: -20, runsOutAt: at(14, 12, 50), early: 22 })
-  expect(weekPart(short, false)).toMatchObject({ value: 'runs out Wed ~12:45', rest: ', 22h early', bad: true })
+  expect(weekPart(short, false)).toMatchObject({ value: 'runs out Wed 12:45', rest: ', 22h early', bad: true })
   expect(weekPart(short, true)).toMatchObject({ value: 'out Wed 12:45', rest: '' })
   expect(weekPart(plan({ left: -2, runsOutAt: at(11, 23), runsOutToday: true, early: 84 }), false).value).toBe('runs out later today')
 

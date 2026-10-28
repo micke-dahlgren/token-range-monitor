@@ -37,9 +37,9 @@ test('the band and the pane draw on the desktop', async ($, on) => {
   // the countdown is plain text: no unit to switch
   expect(await band.find({ key: 'reset-week' })).toBeUndefined()
   // 1.4: the week at the last whole days' pace, the 5-hour cut-off as a clock time
-  expect(await band.find({ type: 'Text', text: /^~\d+% left at (reset|\d\d:\d\d)$/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^\d+% left at (reset|\d\d:\d\d)$/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /^, in \d/ })).toBeDefined()
-  expect(await band.find({ type: 'Text', text: /^cut off ~\d\d:\d\d$/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /^cut off \d\d:\d\d$/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /^, resets \d\d:\d\d$/ })).toBeDefined()
   await band.unmount()
 
